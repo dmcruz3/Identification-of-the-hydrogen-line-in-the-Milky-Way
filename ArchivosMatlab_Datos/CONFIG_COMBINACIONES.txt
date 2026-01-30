@@ -1,0 +1,64 @@
+BIBLIOTECA DE COMBINACIONES ("RECETAS") PARA ANÁLISIS ESPECTRAL
+================================================================
+Usa esta tabla como referencia para configurar tus scripts.
+Copia los valores de la fila que mejor se adapte a tu necesidad.
+
+NOTA: Se omiten parámetros visuales (colores, umbrales).
+
+###################################################################################################
+1. MAIN_DIRECTO.m (Método: STFT / Espectrograma)
+###################################################################################################
+ESCENARIO                 | nfft  | window_size | overlap | Ventana       | EXPLICACIÓN
+--------------------------|-------|-------------|---------|---------------|--------------------------------------------------------
+Exploración (Default)     | 1024  | 1024        | 512     | 'Hamming'     | Balance general. Buen punto de partida.
+Máxima Frecuencia (Lupa)  | 4096  | 4096        | 3072    | 'Blackman'    | Ventana larga separa tonos muy juntos. Ideal interferencias.
+Cazador de Transitorios   | 512   | 256         | 128     | 'Hann'        | Ventana corta captura pulsos rápidos sin borrarlos.
+Precisión Amplitud        | 2048  | 1024        | 512     | 'Flattop'     | Mide dBm exactos (pico ancho pero altura correcta).
+Waterfall Suave (Video)   | 2048  | 1024        | 900     | 'Blackmanharris'| Mucho solapamiento = imagen muy continua y estética.
+
+###################################################################################################
+2. MAIN_MUSIC.m (Método: Subespacio)
+###################################################################################################
+ESCENARIO                 | nfft  | orden_senal | window_len | overlap | EXPLICACIÓN
+--------------------------|-------|-------------|------------|---------|--------------------------------------------------------
+Detección Agresiva        | 2048  | 20          | 800        | 400     | Busca muchas señales débiles a la vez.
+Señal Pura (Limpio)       | 1024  | 3           | 400        | 200     | Solo muestra las 3 señales más fuertes. Ignora resto.
+Estabilidad Máxima        | 4096  | 10          | 2000       | 1000    | Covarianza muy estable. Elimina ruido aleatorio.
+Zoom Temporal             | 512   | 5           | 200        | 100     | Ventana corta para ver cuándo aparece/desaparece una señal.
+
+###################################################################################################
+3. MAIN_AR.m (Método: Yule-Walker)
+###################################################################################################
+ESCENARIO                 | nfft  | orden_ar | window_len | overlap | EXPLICACIÓN
+--------------------------|-------|----------|------------|---------|--------------------------------------------------------
+"Agujas" (Picos Finos)    | 4096  | 100      | 1000       | 500     | Orden altísimo crea picos como agujas. Cuidado: espurios.
+Envolvente Suave          | 1024  | 5        | 500        | 250     | Muestra la forma general (tendencia) del espectro.
+Equilibrado               | 2048  | 30       | 600        | 300     | Buen compromiso para señales típicas de RF.
+
+###################################################################################################
+4. MAIN_INDIRECTO.m (Método: Correlación)
+###################################################################################################
+ESCENARIO                 | nfft  | max_lag | Ventana_Lag | window_len | overlap | EXPLICACIÓN
+--------------------------|-------|---------|-------------|------------|---------|-----------------------------
+Alta Definición Hz        | 4096  | 1000    | 'blackman'  | 2500       | 1250    | Lags largos separan mejor las frec muy bajas/juntas.
+Rápido y Robusto          | 1024  | 150     | 'bartlett'  | 500        | 250     | Cálculo ligero. Buena visión general.
+Crudo (Rectangular)       | 2048  | 400     | 'rectwin'   | 1000       | 500     | Sin suavizado. Datos tal cual.
+
+###################################################################################################
+5. MAIN_CWT.m (Método: Wavelet)
+   *Parámetros dentro de la función cwt(...) y variables de diezmado*
+###################################################################################################
+ESCENARIO                 | VoicesPerOctave | TimeBandwidth | max_samples_cwt | EXPLICACIÓN
+--------------------------|-----------------|---------------|-----------------|--------------------------------------------------------
+Hiper Detalle Espectral   | 48              | 60            | 5000            | Muchas voces/octava. Lento pero preciso en Frec.
+Microscopio Temporal      | 10              | 5             | 20000           | Bandwidth bajo y alto muestreo = Zoom en el Tiempo.
+Estándar Matlab           | 16              | 60            | 5000            | Configuración por defecto equilibrada.
+
+###################################################################################################
+6. MAIN_SUPERLET.m (Método: Super-resolución)
+###################################################################################################
+ESCENARIO                 | metodo | baseCycles | srord   | df   | Muestreo max | EXPLICACIÓN
+--------------------------|--------|------------|---------|------|--------------|-----------------------------------------
+Super Res Frecuencia      | 'aslt' | 3          | [5 40]  | 200  | 4000         | Orden muy alto y ciclos largos. Separa todo.
+Captura Transitorios      | 'aslt' | 1          | [2 10]  | 1000 | 10000        | Ciclo base = 1. Mejor localización temporal posible.
+Preview Rápido            | 'aslt' | 2          | [2 6]   | 2000 | 2000         | Baja carga computacional. Para vista rápida.
