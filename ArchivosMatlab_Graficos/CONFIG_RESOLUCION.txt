@@ -1,0 +1,58 @@
+GUÍA DE CONFIGURACIÓN DE RESOLUCIÓN (TIEMPO vs FRECUENCIA)
+==========================================================
+
+Este archivo detalla qué variables modificar en cada script para mejorar la resolución.
+Recuerda el Principio de Incertidumbre: Mejorar la resolución de Frecuencia suele empeorar la de Tiempo, y viceversa.
+
+-------------------------------------------------------------------------
+1. MAIN_DIRECTO.m (Transformada de Fourier - STFT)
+-------------------------------------------------------------------------
+Ajuste   | Variable       | Valores Típicos      | Efecto
+---------|----------------|----------------------|-----------------------
+Frecuencia| window_size    | 1024 -> 2048 o 4096  | Ventanas más grandes separan mejor frecuencias cercanas. (Empeora Tiempo).
+Frecuencia| nfft           | 1024 -> 4096         | Suaviza visualmente el espectro (más puntos), pero no "separa" más si window_size es chico.
+Tiempo    | window_size    | 1024 -> 512 o 256    | Ventanas cortas capturan eventos rápidos. (Empeora Frecuencia).
+Tiempo    | overlap        | 512  -> (window_size-1)| Cuanto más cercano a window_size, más suave la transición temporal.
+
+-------------------------------------------------------------------------
+2. MAIN_MUSIC.m (Subespacio - Superresolución)
+-------------------------------------------------------------------------
+Ajuste   | Variable       | Valores Típicos      | Efecto
+---------|----------------|----------------------|-----------------------
+Frecuencia| orden_senal    | 10 -> 15 o 20        | Valor CRÍTICO. Si hay muchas señales, aumentar esto permite separarlas. Si es muy alto, aparecen picos falsos.
+Frecuencia| window_len     | 500 -> 1000          | Ventana de datos para calcular la matriz de covarianza. Más datos = estimación más estable.
+Tiempo    | window_len     | 500 -> 200           | Ventanas cortas localizan mejor el evento en el tiempo.
+Grilla    | nfft           | 1024 -> 4096         | Define la suavidad del dibujo del espectro.
+
+-------------------------------------------------------------------------
+3. MAIN_AR.m (Autoregresivo - Promedio Móvil)
+-------------------------------------------------------------------------
+Ajuste   | Variable       | Valores Típicos      | Efecto
+---------|----------------|----------------------|-----------------------
+Frecuencia| orden_ar       | 20 -> 50 o 100       | Aumentar el orden crea picos mucho más finos y definidos. Cuidado con picos falsos (ruido modelado como señal).
+Tiempo    | window_len     | 500 -> 200           | Igual que en MUSIC. Ventanas más cortas = mejor resolución temporal.
+
+-------------------------------------------------------------------------
+4. MAIN_INDIRECTO.m (Autocorrelación)
+-------------------------------------------------------------------------
+Ajuste   | Variable       | Valores Típicos      | Efecto
+---------|----------------|----------------------|-----------------------
+Frecuencia| max_lag        | 300 -> 600 o más     | Más "lags" de correlación equivalen a una ventana efectiva más larga. Separa mejor frecuencias.
+Tiempo    | window_len     | 1024 -> 512          | Tamaño del bloque de datos crudos. Debe ser siempre > max_lag.
+
+-------------------------------------------------------------------------
+5. MAIN_CWT.m (Wavelets)
+-------------------------------------------------------------------------
+Ajuste   | Variable       | Valores Típicos      | Efecto
+---------|----------------|----------------------|-----------------------
+Frecuencia| VoicesPerOctave| 16 -> 32 o 48        | Define cuántas escalas intermedias se calculan por octava. Mayor = mucho mejor detalle espectral.
+Tiempo    | max_samples_cwt| 5000 -> 10000        | Controla el diezmado. Más muestras = FS efectiva más alta = mejor detalle temporal (Zoom).
+
+-------------------------------------------------------------------------
+6. MAIN_SUPERLET.m (Super-resolución Wavelet)
+-------------------------------------------------------------------------
+Ajuste   | Variable       | Valores Típicos      | Efecto
+---------|----------------|----------------------|-----------------------
+Frecuencia| srord (2º valor)| [5 10] -> [5 30]     | El orden máximo de los ciclos. Aumentar separa frecuencias muy juntas.
+Frecuencia| df             | 2000 -> 500          | Paso de frecuencia en Hz. Menor paso = mayor densidad de puntos en eje Y.
+Tiempo    | baseCycles     | 3 -> 1.5 o 1         | Ciclos base. Reducir mejora drásticamente la localización temporal de eventos cortos.
