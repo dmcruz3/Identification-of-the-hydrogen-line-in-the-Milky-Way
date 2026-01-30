@@ -1,3 +1,7 @@
+clc
+clear all;
+close all;
+
 if ~exist('run_batch_mode', 'var')
     clc; clear; close all;
     run_batch_mode = false;
@@ -11,12 +15,12 @@ carpeta = 'ArchivosIQ';
 % Configuración MUSIC
 nfft = 1024;
 orden_senal = 10;
-window_len = 500;
-overlap = 250;
+window_len = 1024;
+overlap = window_len/2;
 
 % Configuración Visualización
 anchoBanda = 400e3;
-rangoColores = [-90 -40];
+rangoColores = [-90 -30];
 alinearRuido = false;
 umbral_guardado_dBm = -55;
 offset_calibracion = -70; % Calibración basada en 'RadioTelescopio'
@@ -83,21 +87,8 @@ overlap_block = blockSize/2;
 step_block = blockSize - overlap_block;
 numBlocks = floor((length(y) - overlap_block) / step_block);
 
-if ~run_batch_mode
-    fig2D=figure('Name', 'Espectro MUSIC 2D', 'Color','w'); ax2D=axes; hold(ax2D,'on');
-    title(sprintf('MUSIC 2D | %s', name_no_ext), 'Interpreter', 'none');
-    view(0,90); clim(ax2D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-else
-    ax2D=[]; fig2D=[];
-end
-
-if ~run_batch_mode
-    fig3D=figure('Name', 'Waterfall MUSIC 3D', 'Color','w'); ax3D=axes; hold(ax3D,'on');
-    title(sprintf('Waterfall MUSIC | %s', name_no_ext), 'Interpreter', 'none');
-    view(-45,60); grid on; clim(ax3D,rangoColores); zlim(ax3D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
-else
-    ax3D=[]; fig3D=[];
-end
+% Inicializar Figuras (Deferido)
+ax2D=[]; fig2D=[]; ax3D=[]; fig3D=[];
 
 lista_final_eventos = [];
 
@@ -106,6 +97,12 @@ f_abs = fc + f_vec;
 
 sum_spec = zeros(nfft, 1);
 count_spec = 0;
+
+% Acumuladores
+Accum_Time = [];
+Accum_P    = [];
+mask_vis = abs(f_vec) <= anchoBanda/2;
+Freq_Plot = f_abs(mask_vis)/1e6;
 
 for k=1:numBlocks
     idx_s = (k-1)*step_block+1;
@@ -152,25 +149,34 @@ for k=1:numBlocks
         end
     end
 
-    mask_vis = abs(f_vec) <= anchoBanda/2;
-    if ~run_batch_mode
-        surf(ax2D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
-        surf(ax3D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
-        drawnow limitrate;
-    end
+    % Acumular datos
+    mask_vis_blk = abs(f_vec) <= anchoBanda/2;
+    Accum_Time = [Accum_Time, t_seg_abs];
+    Accum_P    = [Accum_P, P_dBm(mask_vis_blk, :)];
+
     if mod(k,10)==0, fprintf(' Bloque %d/%.0f (%.0f%%)\n', k, numBlocks, k/numBlocks*100); end
 end
 
 %% 4. RESULTADOS FINALES
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
-if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['MUSIC_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['MUSIC_2D_SinMarcadores_' name_no_ext '.fig']));
-    saveas(fig3D, fullfile(dir_base_img, ['MUSIC_3D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig3D, fullfile(dir_base_img, ['MUSIC_3D_SinMarcadores_' name_no_ext '.fig']));
+% --- GUARDADO DE DATOS CRUDOS (.MAT) ---
+fprintf('Guardando datos crudos en .mat...\n');
+% Frecuencias para guardado
+mask_vis_save = abs(f_vec) <= anchoBanda/2;
+Freq_Save = f_abs(mask_vis_save)/1e6; % Guardamos en MHz para consistencia, o Hz si prefieres. Mantengo MHz segun grafico.
+% Pero mejor guardar Hz reales para evitar confusion.
+Freq_Save = f_abs(mask_vis_save);
+
+nombreMat = fullfile(dir_base_dat, ['Datos_Procesados_MUSIC_' timestamp '.mat']);
+try
+    save(nombreMat, 'Accum_P', 'Accum_Time', 'Freq_Save', 'lista_final_eventos', 'archivoSeleccionado', '-v7.3');
+    fprintf('Datos guardados exitosamente en: %s\n', nombreMat);
+catch ME
+    fprintf('Error al guardar .mat: %s\n', ME.message);
 end
 
+% --- EXCEL Y ESTADÍSTICAS (Prioritario) ---
 if ~isempty(lista_final_eventos)
     fprintf('\n--- RESULTADOS ESTADÍSTICOS (MUSIC) ---\n');
     fprintf('Eventos Totales: %d\n', length(lista_final_eventos));
@@ -184,11 +190,32 @@ if ~isempty(lista_final_eventos)
     [~, idx] = sort([lista_final_eventos.Diferencia_Potencia_dBm], 'descend');
     lista_final_eventos = lista_final_eventos(idx);
 
-    for p=1:length(lista_final_eventos)
-        pk=lista_final_eventos(p);
-        z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
-        if 1, c='m'; else, c='c'; end
-        if ~run_batch_mode
+    % Generar Excel
+    nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_MUSIC_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
+    registrarMetrica('MUSIC', lista_final_eventos, nombreExcel);
+end
+
+% --- GRAFICADO ---
+if ~run_batch_mode
+    fprintf('Generando gráficos finales...\n');
+
+    fig2D=figure('Name', 'Espectro MUSIC 2D', 'Color','w'); ax2D=axes; hold(ax2D,'on');
+    title(sprintf('MUSIC 2D | %s', name_no_ext), 'Interpreter', 'none');
+    view(0,90); clim(ax2D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
+
+    fig3D=figure('Name', 'Waterfall MUSIC 3D', 'Color','w'); ax3D=axes; hold(ax3D,'on');
+    title(sprintf('Waterfall MUSIC | %s', name_no_ext), 'Interpreter', 'none');
+    view(-45,60); grid on; clim(ax3D,rangoColores); zlim(ax3D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
+
+    surf(ax2D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor','none');
+    surf(ax3D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor','none');
+
+    % Marcadores
+    if ~isempty(lista_final_eventos)
+        for p=1:length(lista_final_eventos)
+            pk=lista_final_eventos(p);
+            z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
+            if 1, c='m'; else, c='c'; end
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
             plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
             if p <= 5
@@ -196,9 +223,16 @@ if ~isempty(lista_final_eventos)
             end
         end
     end
-    nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_MUSIC_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
-    registrarMetrica('MUSIC', lista_final_eventos, nombreExcel);
+
+    saveas(fig2D, fullfile(dir_base_img, ['MUSIC_2D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig2D, fullfile(dir_base_img, ['MUSIC_2D_SinMarcadores_' name_no_ext '.fig']));
+    saveas(fig3D, fullfile(dir_base_img, ['MUSIC_3D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig3D, fullfile(dir_base_img, ['MUSIC_3D_SinMarcadores_' name_no_ext '.fig']));
+
+    drawnow;
 end
+
+return;
 
 if ~run_batch_mode
     saveas(fig2D, fullfile(dir_base_img, ['MUSIC_2D_ConMarcadores_' name_no_ext '.png']));

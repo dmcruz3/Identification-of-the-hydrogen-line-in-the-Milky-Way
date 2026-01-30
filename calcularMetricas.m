@@ -45,8 +45,13 @@ else
     P_ruido_val = median(P_perfil);
 end
 
+% Estimación Simple (Media de todo el espectro, para comparación)
+P_ruido_mean_val = mean(P_perfil);
+
 % 2. Métrica Principal: Diferencia Pico - Ruido
-Diferencia_dBm = P_max_val - P_ruido_val;
+% 2. Métrica Principal: Diferencia Pico - Ruido
+Diferencia_dBm = P_max_val - P_ruido_val;           % Robusta (vs Mediana)
+Diferencia_Simple_dBm = P_max_val - P_ruido_mean_val; % Simple (vs Media)
 
 % 3. Análisis de Estabilidad (Solo si es matriz y tenemos dimensión tiempo)
 Delta_Estabilidad = 0;
@@ -82,12 +87,13 @@ m_struct.Freq_Hz = freq_peak;
 m_struct.Tiempo_Max_Seg = tiempo_evento;
 
 m_struct.P_max_dBm = P_max_val;
-m_struct.P_ruido_dBm = P_ruido_val;
-m_struct.P_promedio_dBm = mean(P_perfil); % Métrica auxiliar
+m_struct.P_ruido_dBm = P_ruido_val;         % Mediana (Robusto)
+m_struct.P_ruido_Mean_dBm = P_ruido_mean_val; % Media (Simple)
+m_struct.P_promedio_dBm = mean(P_perfil);   % (Redundante con arriba, pero ok mantener)
 
-m_struct.Diferencia_Potencia_dBm = Diferencia_dBm; % A MAXIMIZAR
-m_struct.Delta_Estabilidad_dBm = Delta_Estabilidad; % A MINIMIZAR (<6)
-% m_struct.Validacion_Estabilidad = Es_Estable; % Eliminado
+m_struct.Diferencia_Potencia_dBm = Diferencia_dBm;        % Robusta
+m_struct.Diferencia_Simple_dBm = Diferencia_Simple_dBm;   % Simple
+m_struct.Delta_Estabilidad_dBm = Delta_Estabilidad;
 
 metrics = [metrics, m_struct];
 end

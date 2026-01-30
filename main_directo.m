@@ -1,3 +1,7 @@
+clc
+clear all;
+close all;
+
 if ~exist('run_batch_mode', 'var')
     clc; clear; close all;
     run_batch_mode = false;
@@ -10,14 +14,14 @@ carpeta = 'ArchivosIQ';
 
 % Configuración STFT
 nfft = 1024;
-window_size = 128;
-overlap = 64;
-nombre_ventana = 'Blackman';
+window_size = 1024;
+overlap = window_size/2;
+nombre_ventana = 'FlatTop';
 
 umbral_guardado_dBm = -75;
 offset_calibracion = -145;
 anchoBanda = 400e3;
-rangoColores = [-90 -60];
+rangoColores = [-90 -50];
 alinearRuido = false;
 nivelRuidoObjetivo = 0;
 
@@ -98,19 +102,8 @@ switch lower(nombre_ventana)
     otherwise, win = hamming(window_size);
 end
 
-% Inicializar Figuras
-if ~run_batch_mode
-    fig2D = figure('Name', 'Espectro Directo 2D', 'Color', 'w'); ax2D = axes; hold(ax2D,'on');
-    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-    title(sprintf('Analisis Directo | %s', archivoSeleccionado.name), 'Interpreter', 'none');
-    clim(ax2D, rangoColores); colormap(jet); colorbar; view(0,90);
-
-    fig3D = figure('Name', 'Waterfall Directo 3D', 'Color', 'w'); ax3D = axes; hold(ax3D,'on');
-    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-    zlabel('Potencia (dBm)');
-    title(sprintf('Waterfall 3D | %s', archivoSeleccionado.name), 'Interpreter', 'none');
-    view(-45, 60); grid on; clim(ax3D, rangoColores); zlim(ax3D, rangoColores); colormap(jet); colorbar;
-end
+% Inicializar Figuras (Deferido)
+ax2D=[]; fig2D=[]; ax3D=[]; fig3D=[];
 
 lista_final_eventos = [];
 
@@ -120,6 +113,11 @@ f_abs = fc + f;
 
 sum_spec = zeros(nfft, 1);
 count_spec = 0;
+
+% Acumuladores
+Accum_Time = [];
+Accum_P    = [];
+mask_vis = abs(f) <= (anchoBanda/2); % Usamos 'f' (relativa) porque F_stft depende del bloque, pero la mascara es constante en frecuencia relativa si nfft fijo.
 
 for k = 1:numBlocks
     idx_start = (k-1)*step_block + 1;
@@ -162,21 +160,10 @@ for k = 1:numBlocks
         end
     end
 
-    % Graficar (Downsampling)
-    idx_vis = abs(F_stft) <= (anchoBanda/2);
-    F_vis = F_abs(idx_vis);
-    P_vis = P_dBm(idx_vis, :);
-
-    step_plot = max(1, floor(length(T_abs)/50));
-    idx_t_plot = 1:step_plot:length(T_abs);
-    T_plot = T_abs(idx_t_plot);
-    P_plot = P_vis(:, idx_t_plot);
-
-    if ~run_batch_mode
-        surf(ax2D, F_vis/1e6, T_plot, P_plot.', 'EdgeColor', 'none');
-        surf(ax3D, F_vis/1e6, T_plot, P_plot.', 'EdgeColor', 'none');
-        drawnow limitrate;
-    end
+    % Acumular datos
+    mask_vis_blk = abs(F_stft) <= (anchoBanda/2);
+    Accum_Time = [Accum_Time, T_abs];
+    Accum_P    = [Accum_P, P_dBm(mask_vis_blk, :)];
 
     if mod(k, 10) == 0
         %fprintf('Bloque %d/%d (%.1f%%)\n', k, numBlocks, 100*k/numBlocks);
@@ -186,40 +173,71 @@ end
 %% 4. RESULTADOS FINALES
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
+% --- GUARDADO DE DATOS CRUDOS (.MAT) ---
+fprintf('Guardando datos crudos en .mat...\n');
+% Reconstruir F_vis para guardado (mismo criterio que plot)
+mask_vis_save = abs(F_stft) <= (anchoBanda/2);
+Freq_Save = (fc + F_stft(mask_vis_save));
+
+nombreMat = fullfile(dir_base_dat, ['Datos_Procesados_Directo_' timestamp '.mat']);
+try
+    save(nombreMat, 'Accum_P', 'Accum_Time', 'Freq_Save', 'lista_final_eventos', 'archivoSeleccionado', '-v7.3');
+    fprintf('Datos guardados exitosamente en: %s\n', nombreMat);
+catch ME
+    fprintf('Error al guardar .mat: %s\n', ME.message);
+end
+
+% --- EXCEL Y ESTADÍSTICAS (Prioritario) ---
+if ~isempty(lista_final_eventos)
+    fprintf('\n--- RESULTADOS ESTADÍSTICOS ---\n');
+    fprintf('Eventos Totales Detectados: %d\n', length(lista_final_eventos));
+
+    % Reporte de Métricas Promedio (Todos los eventos)
+    fprintf('\n>>> MÉTRICAS ROBUSTAS (Promedio General) <<<\n');
+    fprintf('  - Diferencia Pico-Ruido: %.2f dBm\n', mean([lista_final_eventos.Diferencia_Potencia_dBm]));
+    fprintf('  - Potencia Máxima:       %.2f dBm\n', mean([lista_final_eventos.P_max_dBm]));
+    fprintf('  - Piso de Ruido:         %.2f dBm\n', mean([lista_final_eventos.P_ruido_dBm]));
+    fprintf('  - Potencia Promedio:     %.2f dBm\n', mean([lista_final_eventos.P_promedio_dBm]));
+    fprintf('  - Delta Estabilidad:     %.2f dBm\n', mean([lista_final_eventos.Delta_Estabilidad_dBm]));
+
+    % Ordenar Eventos
+    [~, idx_sort] = sort([lista_final_eventos.Diferencia_Potencia_dBm], 'descend');
+    lista_final_eventos = lista_final_eventos(idx_sort);
+
+    % Generar Excel
+    nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_Directo_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
+    registrarMetrica('Directo', lista_final_eventos, nombreExcel);
+end
+
+% --- GRAFICADO ---
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.fig']));
-    saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_SinMarcadores_' name_no_ext '.fig']));
+    fprintf('Generando gráficos finales...\n');
 
+    fig2D = figure('Name', 'Espectro Directo 2D', 'Color', 'w'); ax2D = axes; hold(ax2D,'on');
+    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
+    title(sprintf('Analisis Directo | %s', archivoSeleccionado.name), 'Interpreter', 'none');
+    clim(ax2D, rangoColores); colormap(jet); colorbar; view(0,90);
+
+    fig3D = figure('Name', 'Waterfall Directo 3D', 'Color', 'w'); ax3D = axes; hold(ax3D,'on');
+    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
+    zlabel('Potencia (dBm)');
+    title(sprintf('Waterfall 3D | %s', archivoSeleccionado.name), 'Interpreter', 'none');
+    view(-45, 60); grid on; clim(ax3D, rangoColores); zlim(ax3D, rangoColores); colormap(jet); colorbar;
+
+    % Preparar Ejes
+    % Asumimos F_stft constante en el loop para el eje frec (espectrogama standard)
+    mask_vis_first = abs(F_stft) <= (anchoBanda/2);
+    F_vis = (fc + F_stft(mask_vis_first));
+
+    surf(ax2D, F_vis/1e6, Accum_Time, Accum_P.', 'EdgeColor', 'none');
+    surf(ax3D, F_vis/1e6, Accum_Time, Accum_P.', 'EdgeColor', 'none');
+
+    % Marcadores
     if ~isempty(lista_final_eventos)
-        fprintf('\n--- RESULTADOS ESTADÍSTICOS ---\n');
-        fprintf('Eventos Totales Detectados: %d\n', length(lista_final_eventos));
-
-        % Reporte de Métricas Promedio (Todos los eventos)
-        if ~isempty(lista_final_eventos)
-            fprintf('\n>>> MÉTRICAS ROBUSTAS (Promedio General) <<<\n');
-            fprintf('  - Diferencia Pico-Ruido: %.2f dBm\n', mean([lista_final_eventos.Diferencia_Potencia_dBm]));
-            fprintf('  - Potencia Máxima:       %.2f dBm\n', mean([lista_final_eventos.P_max_dBm]));
-            fprintf('  - Piso de Ruido:         %.2f dBm\n', mean([lista_final_eventos.P_ruido_dBm]));
-            fprintf('  - Potencia Promedio:     %.2f dBm\n', mean([lista_final_eventos.P_promedio_dBm]));
-            fprintf('  - Delta Estabilidad:     %.2f dBm\n', mean([lista_final_eventos.Delta_Estabilidad_dBm]));
-        end
-
-        % Reporte de Métricas Promedio (Estables)
-
-
-        % Marcadores en Gráficas
-        [~, idx_sort] = sort([lista_final_eventos.Diferencia_Potencia_dBm], 'descend');
-        eventos_sorted = lista_final_eventos(idx_sort);
-
-        for p_idx = 1:length(eventos_sorted)
-            pk = eventos_sorted(p_idx);
+        for p_idx = 1:length(lista_final_eventos)
+            pk = lista_final_eventos(p_idx);
             z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
-
-            % Color único para todos, ya no validamos estabilidad
             color_mark = 'm';
-
 
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerSize', 8, ...
                 'MarkerFaceColor', color_mark, 'MarkerEdgeColor','k');
@@ -231,26 +249,33 @@ if ~run_batch_mode
                     'Color', color_mark, 'FontSize',8, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Margin', 1);
             end
         end
-
-        nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_Directo_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
-        registrarMetrica('Directo', lista_final_eventos, nombreExcel);
     end
 
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.fig']));
-    saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_ConMarcadores_' name_no_ext '.png']));
-    saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_ConMarcadores_' name_no_ext '.fig']));
+    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.fig']));
+    saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_SinMarcadores_' name_no_ext '.fig']));
 
-    % Perfil 1D
-    figProfile = figure('Name', 'Perfil Promedio', 'Color', 'w');
-    spec_profile = sum_spec / max(count_spec, 1);
-    plot(f_abs/1e6, spec_profile, 'k', 'LineWidth', 1.2);
-    grid on; xlabel('Frecuencia (MHz)');
-    ylabel('Amplitud Promedio (dBm)');
-    xline(f_HI/1e6, 'r--', 'LineWidth', 1);
-    title('Estimación Espectral (Directo)');
-    saveas(figProfile, fullfile(dir_base_img, ['Directo_Perfil_' name_no_ext '.png']));
-    saveas(figProfile, fullfile(dir_base_img, ['Directo_Perfil_' name_no_ext '.fig']));
+    drawnow;
+end
+
+return;
+
+saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.png']));
+saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.fig']));
+saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_ConMarcadores_' name_no_ext '.png']));
+saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_ConMarcadores_' name_no_ext '.fig']));
+
+% Perfil 1D
+figProfile = figure('Name', 'Perfil Promedio', 'Color', 'w');
+spec_profile = sum_spec / max(count_spec, 1);
+plot(f_abs/1e6, spec_profile, 'k', 'LineWidth', 1.2);
+grid on; xlabel('Frecuencia (MHz)');
+ylabel('Amplitud Promedio (dBm)');
+xline(f_HI/1e6, 'r--', 'LineWidth', 1);
+title('Estimación Espectral (Directo)');
+saveas(figProfile, fullfile(dir_base_img, ['Directo_Perfil_' name_no_ext '.png']));
+saveas(figProfile, fullfile(dir_base_img, ['Directo_Perfil_' name_no_ext '.fig']));
 end
 
 if run_batch_mode

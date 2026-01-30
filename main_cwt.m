@@ -1,3 +1,7 @@
+clc
+clear all;
+close all;
+
 if ~exist('run_batch_mode', 'var')
     clc; clear; close all;
     run_batch_mode = false;
@@ -97,22 +101,8 @@ t_signal = ((0:length(y)-1) / fs) + timeOffset;
 disp('--- Calculando CWT por Ventanas ---');
 if exist('cwt', 'file') ~= 2, error('Wavelet Toolbox necesario.'); end
 
-% Inicializar Figuras
-if ~run_batch_mode
-    fig2D = figure('Name', 'Escalograma CWT (2D)', 'Color', 'w'); ax2D = axes; hold(ax2D, 'on');
-    xlabel(ax2D, 'Frecuencia (MHz)'); ylabel(ax2D, 'Tiempo (s)');
-    clim(ax2D, rangoColores); view(ax2D, 0, 90); colormap(fig2D, jet); colorbar(ax2D);
-else
-    ax2D = []; fig2D = [];
-end
-
-if ~run_batch_mode
-    fig3D = figure('Name', 'Waterfall CWT (3D)', 'Color', 'w'); ax3D = axes; hold(ax3D, 'on');
-    grid(ax3D, 'on'); xlabel(ax3D, 'Frecuencia (MHz)'); ylabel(ax3D, 'Tiempo (s)'); zlabel(ax3D, 'Magnitud (dBmm)');
-    clim(ax3D, rangoColores); zlim(ax3D, rangoColores); view(ax3D, -45, 60); colormap(fig3D, jet); colorbar(ax3D);
-else
-    ax3D = []; fig3D = [];
-end
+% Inicializar Figuras (Deferido)
+ax2D=[]; fig2D=[]; ax3D=[]; fig3D=[];
 
 blockSize = 5000;
 overlap_block = blockSize/2;
@@ -123,6 +113,11 @@ lista_final_eventos = [];
 sum_spec = [];
 count_spec = 0;
 f_profile = [];
+
+% Acumuladores
+Accum_Time = [];
+Accum_P    = [];
+Freq_Plot  = [];
 
 for k = 1:numBlocks
     idx_start = (k-1)*step_block + 1;
@@ -143,6 +138,10 @@ for k = 1:numBlocks
     mag_for_metrics = [];   % Magnitud para cálculo de métricas
     f_for_metrics = [];     % Frecuencia para cálculo de métricas
 
+    % Variables temporales para acumulación
+    blk_Freq_Plot = [];
+    blk_P_Plot    = [];
+
     if ndims(cfs) == 3
         % Señal Compleja
         mag_neg = 20*log10(abs(cfs(:,:,2))) + offset_calibracion;
@@ -159,13 +158,12 @@ for k = 1:numBlocks
         mag_for_metrics = mag_neg;
         f_for_metrics = f_axis;
 
-        % Graficar
+        % Preparar Datos Visualización
         idx_vis = f > (anchoBanda * 0);
         f_vis = f(idx_vis);
-        if ~run_batch_mode
-            surf(ax2D, (fc - f_vis)/1e6, t_plot_vals, mag_neg(idx_vis, idx_plot).', 'EdgeColor', 'none');
-            surf(ax3D, (fc - f_vis)/1e6, t_plot_vals, mag_neg(idx_vis, idx_plot).', 'EdgeColor', 'none');
-        end
+
+        blk_Freq_Plot = (fc - f_vis)/1e6;
+        blk_P_Plot    = mag_neg(idx_vis, idx_plot);
 
     else
         % Señal Real
@@ -183,11 +181,9 @@ for k = 1:numBlocks
         mag_for_metrics = mag;
         f_for_metrics = f_axis;
 
-        % Graficar
-        if ~run_batch_mode
-            surf(ax2D, (fc + f)/1e6, t_plot_vals, mag(:, idx_plot).', 'EdgeColor', 'none');
-            surf(ax3D, (fc + f)/1e6, t_plot_vals, mag(:, idx_plot).', 'EdgeColor', 'none');
-        end
+        % Preparar Datos Visualización
+        blk_Freq_Plot = (fc + f)/1e6;
+        blk_P_Plot    = mag(:, idx_plot);
     end
 
     % --- MÉTRICAS ROBUSTAS CWT ---
@@ -211,20 +207,34 @@ for k = 1:numBlocks
         count_spec = count_spec + size(mag_for_metrics, 2);
     end
 
+    % Acumular para Gráfico Final
+    if k==1
+        Freq_Plot = blk_Freq_Plot;
+    end
+    Accum_Time = [Accum_Time, t_plot_vals];
+    Accum_P    = [Accum_P, blk_P_Plot];
+
     clear cfs mag_neg mag;
-    drawnow limitrate;
+    % drawnow limitrate; % Eliminado
 end
 
 %% 4. RESULTADOS FINALES
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
-if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.fig']));
-    saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_SinMarcadores_' name_no_ext '.fig']));
+% --- GUARDADO DE DATOS CRUDOS (.MAT) ---
+fprintf('Guardando datos crudos en .mat...\n');
+% En CWT, Freq_Plot ya es el vector de frecuencias usada para plotear
+Freq_Save = Freq_Plot;
+
+nombreMat = fullfile(dir_base_dat, ['Datos_Procesados_CWT_' timestamp '.mat']);
+try
+    save(nombreMat, 'Accum_P', 'Accum_Time', 'Freq_Save', 'lista_final_eventos', 'archivoSeleccionado', '-v7.3');
+    fprintf('Datos guardados exitosamente en: %s\n', nombreMat);
+catch ME
+    fprintf('Error al guardar .mat: %s\n', ME.message);
 end
 
+% --- EXCEL Y ESTADÍSTICAS (Prioritario) ---
 if ~isempty(lista_final_eventos)
     fprintf('\n--- RESULTADOS ESTADÍSTICOS (CWT) ---\n');
     fprintf('Eventos Totales: %d\n', length(lista_final_eventos));
@@ -238,20 +248,45 @@ if ~isempty(lista_final_eventos)
     nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_CWT_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
     registrarMetrica('CWT', lista_final_eventos, nombreExcel);
 
-    % Marcadores
+    % Ordenar para marcadores
     [~, idx_sort] = sort([lista_final_eventos.Diferencia_Potencia_dBm], 'descend');
-    eventos_sorted = lista_final_eventos(idx_sort);
+    lista_final_eventos = lista_final_eventos(idx_sort);
+end
 
-    for p = 1:length(eventos_sorted)
-        pk = eventos_sorted(p);
-        z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
-        if 1, c='m'; else, c='c'; end
-        if ~run_batch_mode
+% --- GRAFICADO ---
+if ~run_batch_mode
+    fprintf('Generando gráficos finales...\n');
+
+    fig2D = figure('Name', 'Escalograma CWT (2D)', 'Color', 'w'); ax2D = axes; hold(ax2D, 'on');
+    xlabel(ax2D, 'Frecuencia (MHz)'); ylabel(ax2D, 'Tiempo (s)');
+    clim(ax2D, rangoColores); view(ax2D, 0, 90); colormap(fig2D, jet); colorbar(ax2D);
+
+    fig3D = figure('Name', 'Waterfall CWT (3D)', 'Color', 'w'); ax3D = axes; hold(ax3D, 'on');
+    grid(ax3D, 'on'); xlabel(ax3D, 'Frecuencia (MHz)'); ylabel(ax3D, 'Tiempo (s)'); zlabel(ax3D, 'Magnitud (dBmm)');
+    clim(ax3D, rangoColores); zlim(ax3D, rangoColores); view(ax3D, -45, 60); colormap(fig3D, jet); colorbar(ax3D);
+
+    surf(ax2D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor', 'none');
+    surf(ax3D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor', 'none');
+
+    % Marcadores
+    if ~isempty(lista_final_eventos)
+        for p = 1:length(lista_final_eventos)
+            pk = lista_final_eventos(p);
+            z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
+            if 1, c='m'; else, c='c'; end
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
             plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
         end
     end
+
+    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.fig']));
+    saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_SinMarcadores_' name_no_ext '.fig']));
+
+    drawnow;
 end
+return;
 
 if ~run_batch_mode
     saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_ConMarcadores_' name_no_ext '.png']));

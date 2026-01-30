@@ -1,3 +1,7 @@
+clc
+clear all;
+close all;
+
 if ~exist('run_batch_mode', 'var')
     clc; clear; close all;
     run_batch_mode = false;
@@ -122,29 +126,20 @@ step_block = blockSize - overlap_block;
 numBlocks = floor((length(y) - overlap_block) / step_block);
 
 % Inicializar Figuras
-if ~run_batch_mode
-    fig2D = figure('Color','w', 'Name', 'Superlet Viewer HI (2D)'); ax2D = axes; hold(ax2D, 'on');
-    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-    title(sprintf('Superlet | %s', name_no_ext), 'Interpreter', 'none');
-    axis tight; colormap(jet); view(0, 90); clim(ax2D, rangoColores); colorbar(ax2D);
-else
-    ax2D = []; fig2D = [];
-end
-
-if ~run_batch_mode
-    fig3D = figure('Color', 'w', 'Name', 'Waterfall 3D - Superlet'); ax3D = axes; hold(ax3D, 'on');
-    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
-    title(['Waterfall 3D | ' archivoSeleccionado.name], 'Interpreter', 'none');
-    view(-45, 60); axis tight; colormap(jet); grid on; clim(ax3D, rangoColores); zlim(ax3D, rangoColores); colorbar(ax3D);
-else
-    ax3D = []; fig3D = [];
-end
+% Inicializar Figuras (Deferido)
+ax2D=[]; fig2D=[]; ax3D=[]; fig3D=[];
 
 mask_roi = f_rf < fc;
 f_roi = f_rf(mask_roi);
 lista_final_eventos = [];
 sum_spec = zeros(length(f_rf), 1);
 count_spec = 0;
+
+% Acumuladores
+Accum_Time = [];
+Accum_P    = [];
+mask_plot_bw = abs(f_rf - fc) <= anchoBanda/2;
+Freq_Plot = f_rf(mask_plot_bw)/1e6;
 
 for k = 1:numBlocks
     idx_start = (k-1)*step_block + 1;
@@ -191,32 +186,36 @@ for k = 1:numBlocks
         end
     end
 
-    % Graficar (Downsampling)
+    % Acumular datos
     puntos_plot = 200;
     step_plot = max(1, floor(length(t_block_abs) / puntos_plot));
     idx_plot = 1:step_plot:length(t_block_abs);
     t_plot = t_block_abs(idx_plot);
     S_dBm_plot = S_dBm(:, idx_plot);
-    mask_plot_bw = abs(f_rf - fc) <= anchoBanda/2;
 
-    if ~run_batch_mode
-        surf(ax2D, f_rf(mask_plot_bw)/1e6, t_plot, S_dBm_plot(mask_plot_bw, :).', 'EdgeColor', 'none');
-        surf(ax3D, f_rf(mask_plot_bw)/1e6, t_plot, S_dBm_plot(mask_plot_bw, :).', 'EdgeColor', 'none');
-        drawnow limitrate;
-    end
+    Accum_Time = [Accum_Time, t_plot];
+    Accum_P    = [Accum_P, S_dBm_plot(mask_plot_bw, :)];
+
     if mod(k,10)==0, fprintf(' Bloque %d/%.0f (%.0f%%)\n', k, numBlocks, k/numBlocks*100); end
 end
 
 %% 5. RESULTADOS FINALES
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
-if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.fig']));
-    saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_SinMarcadores_' name_no_ext '.fig']));
+% --- GUARDADO DE DATOS CRUDOS (.MAT) ---
+fprintf('Guardando datos crudos en .mat...\n');
+% En CWT, Freq_Plot ya es el vector de frecuencias usada para plotear
+Freq_Save = Freq_Plot;
+
+nombreMat = fullfile(dir_base_dat, ['Datos_Procesados_SUPERLET_' timestamp '.mat']);
+try
+    save(nombreMat, 'Accum_P', 'Accum_Time', 'Freq_Save', 'lista_final_eventos', 'archivoSeleccionado', '-v7.3');
+    fprintf('Datos guardados exitosamente en: %s\n', nombreMat);
+catch ME
+    fprintf('Error al guardar .mat: %s\n', ME.message);
 end
 
+% --- EXCEL Y ESTADÍSTICAS (Prioritario) ---
 if ~isempty(lista_final_eventos)
     fprintf('\n--- RESULTADOS ESTADÍSTICOS (SUPERLET) ---\n');
     fprintf('Eventos Totales: %d\n', length(lista_final_eventos));
@@ -232,16 +231,46 @@ if ~isempty(lista_final_eventos)
 
     [~, idx_sort] = sort([lista_final_eventos.Diferencia_Potencia_dBm], 'descend');
     eventos_sorted = lista_final_eventos(idx_sort);
+end
 
-    for p=1:length(eventos_sorted)
-        pk=eventos_sorted(p);
-        if 1, c_m = 'm'; else, c_m = 'c'; end
-        if ~run_batch_mode
+% --- GRAFICADO ---
+if ~run_batch_mode
+    fprintf('Generando gráficos finales...\n');
+
+    fig2D = figure('Color','w', 'Name', 'Superlet Viewer HI (2D)'); ax2D = axes; hold(ax2D, 'on');
+    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
+    title(sprintf('Superlet | %s', name_no_ext), 'Interpreter', 'none');
+    axis tight; colormap(jet); view(0, 90); clim(ax2D, rangoColores); colorbar(ax2D);
+
+    fig3D = figure('Color', 'w', 'Name', 'Waterfall 3D - Superlet'); ax3D = axes; hold(ax3D, 'on');
+    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
+    title(['Waterfall 3D | ' archivoSeleccionado.name], 'Interpreter', 'none');
+    view(-45, 60); axis tight; colormap(jet); grid on; clim(ax3D, rangoColores); zlim(ax3D, rangoColores); colorbar(ax3D);
+
+    surf(ax2D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor', 'none');
+    surf(ax3D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor', 'none');
+
+    % Marcadores
+    if ~isempty(lista_final_eventos)
+        for p=1:length(eventos_sorted)
+            pk=eventos_sorted(p);
+            if 1, c_m = 'm'; else, c_m = 'c'; end
+
             plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerSize', 10, 'MarkerFaceColor', c_m, 'MarkerEdgeColor', 'k');
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerSize', 10, 'MarkerFaceColor', c_m, 'MarkerEdgeColor', 'k');
+
         end
     end
+
+    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.fig']));
+    saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_SinMarcadores_' name_no_ext '.fig']));
+
+    drawnow;
 end
+
+return;
 
 if ~run_batch_mode
     saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_ConMarcadores_' name_no_ext '.png']));
