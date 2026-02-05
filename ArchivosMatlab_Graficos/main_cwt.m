@@ -13,12 +13,12 @@ f_HI = 1420e6;
 carpeta = 'ArchivosIQ';
 
 % Configuración Visualización y Análisis
-anchoBanda = 400e3;
+anchoBanda = 600e3;
 rangoColores = [-90 -40];
-alinearRuido = false;
-nivelRuidoObjetivo = 0;
+alinearRuido = true;
+nivelRuidoObjetivo = -80;
 umbral_guardado_dBm = -50;
-offset_calibracion = -90; % Calibración basada en 'RadioTelescopio'
+offset_calibracion = -0; % Calibración basada en 'RadioTelescopio'
 
 %% 1. SELECCIÓN DE ARCHIVO
 if ~exist(carpeta, 'dir'), error(['La carpeta "' carpeta '" no existe.']); end
@@ -51,28 +51,53 @@ fc = f_HI;
 
 %% 2. LECTURA DE DATOS
 disp(' ');
+totalMuestras = archivoSeleccionado.bytes / 4;
+duracionTotal = totalMuestras / fs;
+
 if ~run_batch_mode
-    inicio_pct = input('Inicio (%): '); if isempty(inicio_pct), inicio_pct=0; end
-    fin_pct = input('Fin (%): '); if isempty(fin_pct), fin_pct=100; end
+    disp(' ');
+    fprintf('Duración Total del Archivo: %.2f segundos\n', duracionTotal);
+
+    inicio_seg = input('Inicio (s): ');
+    if isempty(inicio_seg), inicio_seg = 0; end
+
+    fin_seg = input('Fin (s): ');
+    if isempty(fin_seg), fin_seg = duracionTotal; end
+
+    if fin_seg > duracionTotal, fin_seg = duracionTotal; end
+    if inicio_seg < 0, inicio_seg = 0; end
+    if fin_seg <= inicio_seg, fin_seg = duracionTotal; end
+
+    duracion_elegida = fin_seg - inicio_seg;
+    pct_usado = (duracion_elegida / duracionTotal) * 100;
+    fprintf('--> Se analizará %.2f%% del archivo (%.2f s)\n', pct_usado, duracion_elegida);
+
+    byteInicio = floor(inicio_seg * fs) * 4;
+    muestrasLeer = floor(duracion_elegida * fs) * 2;
+
+    folder_suffix = sprintf('_Inicio%.2fs_Fin%.2fs', inicio_seg, fin_seg);
+    pct_display = pct_usado;
 else
     inicio_pct = batch_inicio_pct;
     fin_pct = batch_fin_pct;
-end
-if fin_pct - inicio_pct > 100, fin_pct = inicio_pct + 100; end
-pct_elegido = fin_pct - inicio_pct;
+    if fin_pct - inicio_pct > 100, fin_pct = inicio_pct + 100; end
+    pct_elegido = fin_pct - inicio_pct;
 
-folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    byteInicio = floor((inicio_pct / 100) * totalMuestras) * 4;
+    muestrasLeer = floor((pct_elegido / 100) * totalMuestras) * 2;
+
+    folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    pct_display = pct_elegido;
+end
 dir_base_img = fullfile('Resultados_Imagenes', ['CWT_' name_no_ext], [timestamp_inicio folder_suffix]);
 if ~exist(dir_base_img, 'dir'), mkdir(dir_base_img); end
 
-totalMuestras = archivoSeleccionado.bytes / 4;
-byteInicio = floor((inicio_pct / 100) * totalMuestras) * 4;
-muestrasLeer = floor((pct_elegido / 100) * totalMuestras) * 2;
+% totalMuestras, byteInicio, muestrasLeer calculados arriba
 timeOffset = (byteInicio / 4) / fs;
 
 f = fopen(fullPath, 'r');
 fseek(f, byteInicio, 'bof');
-disp(['--> Leyendo ' num2str(pct_elegido) '%...']);
+disp(['--> Leyendo ' num2str(pct_display) '%...']);
 s = fread(f, muestrasLeer, 'short=>single');
 fclose(f);
 
@@ -105,6 +130,7 @@ if exist('cwt', 'file') ~= 2, error('Wavelet Toolbox necesario.'); end
 if ~run_batch_mode
     fig2D = figure('Name', 'Escalograma CWT (2D)', 'Color', 'w'); ax2D = axes; hold(ax2D, 'on');
     xlabel(ax2D, 'Frecuencia (MHz)'); ylabel(ax2D, 'Tiempo (s)');
+    title(sprintf('CWT 2D | %s', name_no_ext), 'Interpreter', 'none');
     clim(ax2D, rangoColores); view(ax2D, 0, 90); colormap(fig2D, jet); colorbar(ax2D);
 else
     ax2D = []; fig2D = [];
@@ -113,6 +139,7 @@ end
 if ~run_batch_mode
     fig3D = figure('Name', 'Waterfall CWT (3D)', 'Color', 'w'); ax3D = axes; hold(ax3D, 'on');
     grid(ax3D, 'on'); xlabel(ax3D, 'Frecuencia (MHz)'); ylabel(ax3D, 'Tiempo (s)'); zlabel(ax3D, 'Magnitud (dBmm)');
+    title(sprintf('Waterfall CWT | %s', name_no_ext), 'Interpreter', 'none');
     clim(ax3D, rangoColores); zlim(ax3D, rangoColores); view(ax3D, -45, 60); colormap(fig3D, jet); colorbar(ax3D);
 else
     ax3D = []; fig3D = [];

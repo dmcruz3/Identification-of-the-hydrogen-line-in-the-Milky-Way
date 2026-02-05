@@ -18,12 +18,12 @@ window_size = 1024;
 overlap = window_size/2;
 nombre_ventana = 'FlatTop';
 
-umbral_guardado_dBm = -75;
-offset_calibracion = -145;
+umbral_guardado_dBm = -60;
+offset_calibracion = -0;
 anchoBanda = 400e3;
-rangoColores = [-90 -50];
-alinearRuido = false;
-nivelRuidoObjetivo = 0;
+rangoColores = [-90 -40];
+alinearRuido = true;
+nivelRuidoObjetivo = -80;
 
 
 %% 1. SELECCIÓN DE ARCHIVO
@@ -55,28 +55,62 @@ if ~exist(dir_base_dat, 'dir'), mkdir(dir_base_dat); end
 fc = f_HI;
 
 %% 2. LECTURA DE DATOS
+totalMuestras = archivoSeleccionado.bytes / 4;
+duracionTotal = totalMuestras / fs;
+
 if ~run_batch_mode
     disp(' ');
-    inicio_pct = input('Inicio (%): '); if isempty(inicio_pct), inicio_pct=0; end
-    fin_pct = input('Fin (%): '); if isempty(fin_pct), fin_pct=100; end
+    fprintf('Duración Total del Archivo: %.2f segundos\n', duracionTotal);
+
+    inicio_seg = input('Inicio (s): ');
+    if isempty(inicio_seg), inicio_seg = 0; end
+
+    fin_seg = input('Fin (s): ');
+    if isempty(fin_seg), fin_seg = duracionTotal; end
+
+    % Validaciones básicas
+    if fin_seg > duracionTotal, fin_seg = duracionTotal; end
+    if inicio_seg < 0, inicio_seg = 0; end
+    if fin_seg <= inicio_seg
+        warning('Fin menor o igual a Inicio. Se usará hasta el final.');
+        fin_seg = duracionTotal;
+    end
+
+    duracion_elegida = fin_seg - inicio_seg;
+    pct_usado = (duracion_elegida / duracionTotal) * 100;
+    fprintf('--> Se analizará %.2f%% del archivo (%.2f s)\n', pct_usado, duracion_elegida);
+
+    % Convertir segundos a bytes/muestras
+    byteInicio = floor(inicio_seg * fs) * 4;
+    muestrasComplejas_Leer = floor(duracion_elegida * fs);
+    muestrasLeer = muestrasComplejas_Leer * 2; % 2 shorts por complejo (I+Q)
+
+    folder_suffix = sprintf('_Inicio%.2fs_Fin%.2fs', inicio_seg, fin_seg);
+
+    % Actualizar variable para display de carga
+    pct_display = pct_usado;
+
 else
+    % Lógica Batch (mantiene porcentajes)
     inicio_pct = batch_inicio_pct;
     fin_pct = batch_fin_pct;
-end
-pct_elegido = fin_pct - inicio_pct;
+    pct_elegido = fin_pct - inicio_pct;
 
-folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    byteInicio = floor((inicio_pct / 100) * totalMuestras) * 4;
+    muestrasLeer = floor((pct_elegido / 100) * totalMuestras) * 2;
+
+    folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    pct_display = pct_elegido;
+end
+
 dir_base_img = fullfile('Resultados_Imagenes', ['DIRECTO_' name_no_ext], [timestamp_inicio folder_suffix]);
 if ~exist(dir_base_img, 'dir'), mkdir(dir_base_img); end
 
-totalMuestras = archivoSeleccionado.bytes / 4;
-byteInicio = floor((inicio_pct / 100) * totalMuestras) * 4;
-muestrasLeer = floor((pct_elegido / 100) * totalMuestras) * 2;
 timeOffset = (byteInicio / 4) / fs;
 
 f = fopen(fullPath, 'r');
 fseek(f, byteInicio, 'bof');
-disp(['--> Leyendo ' num2str(pct_elegido) '%...']);
+disp(['--> Leyendo ' num2str(pct_display) '%...']);
 s = fread(f, muestrasLeer, 'short=>single');
 fclose(f);
 

@@ -13,7 +13,7 @@ f_HI = 1420e6;
 carpeta = 'ArchivosIQ';
 
 % Configuración Superlet
-metodo = 'faslt';
+metodo = 'nfaslt';
 baseCycles = 3;
 srord = [5 10];
 df = 2000;
@@ -21,11 +21,11 @@ max_samples_slt = 5000;
 
 % Configuración Visualización
 anchoBandaDefault = 400e3;
-rangoColores = [-70 -30];
-alinearRuido = false;
-nivelRuidoObjetivo = 0;
+rangoColores = [-90 -40];
+alinearRuido = true;
+nivelRuidoObjetivo = -80;
 umbral_guardado_dBm = -50;
-offset_calibracion = -130; % Calibración basada en 'RadioTelescopio'
+offset_calibracion = -0; % Calibración basada en 'RadioTelescopio'
 
 %% 1. SELECCIÓN DE ARCHIVO
 if ~exist(carpeta, 'dir'), error(['La carpeta "' carpeta '" no existe.']); end
@@ -57,24 +57,48 @@ fc = f_HI;
 
 %% 2. LECTURA DE DATOS
 disp(' ');
+totalMuestras = archivoSeleccionado.bytes / 4;
+duracionTotal = totalMuestras / fs;
+
 if ~run_batch_mode
-    inicio_pct = input('Inicio (%): '); if isempty(inicio_pct), inicio_pct=0; end
-    fin_pct = input('Fin (%): '); if isempty(fin_pct), fin_pct=100; end
+    disp(' ');
+    fprintf('Duración Total del Archivo: %.2f segundos\n', duracionTotal);
+
+    inicio_seg = input('Inicio (s): ');
+    if isempty(inicio_seg), inicio_seg = 0; end
+
+    fin_seg = input('Fin (s): ');
+    if isempty(fin_seg), fin_seg = duracionTotal; end
+
+    if fin_seg > duracionTotal, fin_seg = duracionTotal; end
+    if inicio_seg < 0, inicio_seg = 0; end
+    if fin_seg <= inicio_seg, fin_seg = duracionTotal; end
+
+    duracion_elegida = fin_seg - inicio_seg;
+    pct_usado = (duracion_elegida / duracionTotal) * 100;
+    fprintf('--> Se analizará %.2f%% del archivo (%.2f s)\n', pct_usado, duracion_elegida);
+
+    byteInicio = floor(inicio_seg * fs) * 4;
+    muestrasShortLeer = floor(duracion_elegida * fs) * 2;
+
+    folder_suffix = sprintf('_Inicio%.2fs_Fin%.2fs', inicio_seg, fin_seg);
+    pct_display = pct_usado;
 else
     inicio_pct = batch_inicio_pct;
     fin_pct = batch_fin_pct;
-end
-if fin_pct - inicio_pct > 100, fin_pct = inicio_pct + 100; end
-pct_elegido = fin_pct - inicio_pct;
+    if fin_pct - inicio_pct > 100, fin_pct = inicio_pct + 100; end
+    pct_elegido = fin_pct - inicio_pct;
 
-folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    byteInicio = floor((inicio_pct / 100) * totalMuestras) * 4;
+    muestrasShortLeer = floor((pct_elegido / 100) * totalMuestras) * 2;
+
+    folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    pct_display = pct_elegido;
+end
 dir_base_img = fullfile('Resultados_Imagenes', ['SUPERLET_' name_no_ext], [timestamp_inicio folder_suffix]);
 if ~exist(dir_base_img, 'dir'), mkdir(dir_base_img); end
 
-totalMuestrasComplejas = archivoSeleccionado.bytes / 4;
-byteInicio = floor((inicio_pct / 100) * totalMuestrasComplejas) * 4;
-muestrasComplejasLeer = floor((pct_elegido / 100) * totalMuestrasComplejas);
-muestrasShortLeer = muestrasComplejasLeer * 2;
+% totalMuestrasComplejas, byteInicio, muestrasShortLeer calculados arriba
 timeOffset = (byteInicio / 4) / fs;
 
 f = fopen(fullPath, 'r');

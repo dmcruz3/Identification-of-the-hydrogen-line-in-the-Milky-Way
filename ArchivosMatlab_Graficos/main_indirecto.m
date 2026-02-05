@@ -14,15 +14,16 @@ carpeta = 'ArchivosIQ';
 
 % Configuración Correlación
 nfft = 1024;
-max_lag = 37;
+max_lag = 300;
 nombre_ventana_lag = 'bartlett';
-window_len = 128;
+window_len = 1024;
 overlap = window_len/2;
+nivelRuidoObjetivo = -80;
 
 % Configuración Visualización
 anchoBanda = 400e3;
 rangoColores = [-90 -40];
-alinearRuido = false;
+alinearRuido = true;
 umbral_guardado_dBm = -70;
 offset_calibracion = -120; % Calibración basada en 'RadioTelescopio'
 
@@ -53,22 +54,46 @@ fc = f_HI;
 
 %% 2. LECTURA DE DATOS
 disp(' ');
+totalB = archivoSeleccionado.bytes;
+totalMuestras = totalB / 4;
+duracionTotal = totalMuestras / fs;
+
 if ~run_batch_mode
-    inicio_pct = input('Inicio (%): '); if isempty(inicio_pct), inicio_pct=0; end
-    fin_pct = input('Fin (%): '); if isempty(fin_pct), fin_pct=100; end
+    disp(' ');
+    fprintf('Duración Total del Archivo: %.2f segundos\n', duracionTotal);
+
+    inicio_seg = input('Inicio (s): ');
+    if isempty(inicio_seg), inicio_seg = 0; end
+
+    fin_seg = input('Fin (s): ');
+    if isempty(fin_seg), fin_seg = duracionTotal; end
+
+    if fin_seg > duracionTotal, fin_seg = duracionTotal; end
+    if inicio_seg < 0, inicio_seg = 0; end
+    if fin_seg <= inicio_seg, fin_seg = duracionTotal; end
+
+    duracion_elegida = fin_seg - inicio_seg;
+    pct_usado = (duracion_elegida / duracionTotal) * 100;
+    fprintf('--> Se analizará %.2f%% del archivo (%.2f s)\n', pct_usado, duracion_elegida);
+
+    byteInit = floor(inicio_seg * fs) * 4;
+    nRead = floor(duracion_elegida * fs) * 2;
+
+    folder_suffix = sprintf('_Inicio%.2fs_Fin%.2fs', inicio_seg, fin_seg);
 else
     inicio_pct = batch_inicio_pct;
     fin_pct = batch_fin_pct;
-end
-pct = fin_pct-inicio_pct;
+    pct = fin_pct-inicio_pct;
 
-folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+    byteInit = floor((inicio_pct/100)*totalB/4)*4;
+    nRead = floor((pct/100)*totalB/4)*2;
+
+    folder_suffix = sprintf('_Inicio%d_Fin%d', inicio_pct, fin_pct);
+end
 dir_base_img = fullfile('Resultados_Imagenes', ['INDIRECTO_' name_no_ext], [timestamp_inicio folder_suffix]);
 if ~exist(dir_base_img, 'dir'), mkdir(dir_base_img); end
 
-totalB = archivoSeleccionado.bytes;
-byteInit = floor((inicio_pct/100)*totalB/4)*4;
-nRead = floor((pct/100)*totalB/4)*2;
+% totalB, byteInit, nRead calculados arriba
 timeOff = (byteInit/4)/fs;
 
 f = fopen(fullPath,'r');
@@ -91,17 +116,21 @@ numBlocks = floor((length(y) - overlap_block) / step_block);
 
 w_lag = bartlett(2*max_lag+1);
 
-% Figuras: Se crean al final para evitar bloqueo
+% Figuras
 if ~run_batch_mode
     fig2D=figure('Name', 'Espectro Indirecto 2D', 'Color','w'); ax2D=axes; hold(ax2D,'on');
     title(sprintf('Indirecto 2D | %s', name_no_ext), 'Interpreter', 'none');
     view(0,90); clim(ax2D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-    
+else
+    ax2D=[]; fig2D=[];
+end
+
+if ~run_batch_mode
     fig3D=figure('Name', 'Waterfall Indirecto 3D', 'Color','w'); ax3D=axes; hold(ax3D,'on');
     title(sprintf('Waterfall Indirecto | %s', name_no_ext), 'Interpreter', 'none');
     view(-45,60); grid on; clim(ax3D,rangoColores); zlim(ax3D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
 else
-    ax2D=[]; fig2D=[]; ax3D=[]; fig3D=[];
+    ax3D=[]; fig3D=[];
 end
 
 lista_final_eventos = [];
@@ -111,11 +140,6 @@ f_abs = fc + f_vec;
 
 sum_spec = zeros(nfft, 1);
 count_spec = 0;
-
-% Acumuladores para visualización final
-Accum_Freq = f_abs/1e6; % Vector de frecuencias (constante)
-Accum_Time = [];        % Se irá concatenando
-Accum_P    = [];        % Se irá concatenando
 
 for k=1:numBlocks
     idx_s = (k-1)*step_block+1;
@@ -144,7 +168,7 @@ for k=1:numBlocks
     fprintf('   > Nivel de Ruido Detectado (Bloque %d): %.2f dBm\n', k, r_est);
 
     if alinearRuido
-        P_dBm = P_dBm + (0 - r_est);
+        P_dBm = P_dBm + (nivelRuidoObjetivo - r_est);
     end
 
     sum_spec = sum_spec + sum(P_dBm, 2);
@@ -163,21 +187,26 @@ for k=1:numBlocks
         end
     end
 
-    % Acumular datos para gráfico final
+    % Graficar
     mask_vis = abs(f_vec) <= anchoBanda/2;
-    % Transponemos P_dBm para que sea (Tiempo x Frecuencia) si usamos surf(X,Y,Z) donde Z es Matriz
-    % O mantenemos (Frecuencia x Tiempo) y usamos 'shading flat'.
-    % Normalmente waterfall espera Z(y,x).
-    % Aquí acumularemos tal cual sale: Freq x Time
-    
-    % Para simplificar la concatenación temporal:
-    Accum_Time = [Accum_Time, t_seg_abs];
-    Accum_P    = [Accum_P, P_dBm(mask_vis,:)];
-
+    if ~run_batch_mode
+        surf(ax2D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
+        surf(ax3D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
+        drawnow limitrate;
+    end
     if mod(k,10)==0, fprintf(' Bloque %d/%.0f (%.0f%%)\n', k, numBlocks, k/numBlocks*100); end
 end
 
-%% 4. RESULTADOS FINALES Y EXCEL (Prioritario)
+%% 4. RESULTADOS FINALES
+timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+
+if ~run_batch_mode
+    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.fig']));
+    saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_SinMarcadores_' name_no_ext '.png']));
+    saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_SinMarcadores_' name_no_ext '.fig']));
+end
+
 if ~isempty(lista_final_eventos)
     fprintf('\n--- RESULTADOS ESTADÍSTICOS (Indirecto) ---\n');
     fprintf('Eventos Totales: %d\n', length(lista_final_eventos));
@@ -192,30 +221,11 @@ if ~isempty(lista_final_eventos)
     [~, idx] = sort([lista_final_eventos.Diferencia_Potencia_dBm], 'descend');
     lista_final_eventos = lista_final_eventos(idx);
 
-    % Generar Excel antes de graficar
-    nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_Indirecto_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
-    registrarMetrica('Indirecto', lista_final_eventos, nombreExcel);
-end
-
-% --- GRAFICADO FINAL ---
-if ~run_batch_mode
-    fprintf('Generando gráficos finales...\n');
-    % Eje Frecuencia recortado
-    mask_vis = abs(f_vec) <= anchoBanda/2;
-    Freq_Plot = f_abs(mask_vis)/1e6;
-    
-    % Downsampling visual si es muy grande (opcional, por ahora directo)
-    % surf(X, Y, Z) -> X=Frec, Y=Time, Z=Potencia(Frec,Time)'
-    
-    surf(ax2D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor','none');
-    surf(ax3D, Freq_Plot, Accum_Time, Accum_P.', 'EdgeColor','none');
-    
-    % Marcadores (dependen de lista_final_eventos ordenada)
-    if ~isempty(lista_final_eventos)
-        for p=1:length(lista_final_eventos)
-            pk=lista_final_eventos(p);
-            z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
-            if 1, c='m'; else, c='c'; end
+    for p=1:length(lista_final_eventos)
+        pk=lista_final_eventos(p);
+        z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
+        if 1, c='m'; else, c='c'; end
+        if ~run_batch_mode
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
             plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
             if p <= 5
@@ -223,21 +233,9 @@ if ~run_batch_mode
             end
         end
     end
-    
-    drawnow;
+    nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_Indirecto_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
+    registrarMetrica('Indirecto', lista_final_eventos, nombreExcel);
 end
-
-%% GUARDADO DE IMAGENES
-timestamp = datestr(now, 'yyyymmdd_HHMMSS');
-
-if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.fig']));
-    saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_SinMarcadores_' name_no_ext '.fig']));
-end
-
-
 return;
 
 if ~run_batch_mode
