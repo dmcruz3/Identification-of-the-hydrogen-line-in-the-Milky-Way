@@ -16,16 +16,35 @@ idx = input('Selecciona el número del archivo: ');
 if isempty(idx) || idx < 1 || idx > length(archivos), error('Selección inválida.'); end
 archivoSeleccionado = archivos(idx);
 
+fs = 1e6;
+totalMuestras = archivoSeleccionado.bytes / 4;
+duracionTotal = totalMuestras / fs;
+
 disp(' ');
-inicio_pct = input('Inicio (%): '); if isempty(inicio_pct), inicio_pct=0; end
-fin_pct = input('Fin (%): '); if isempty(fin_pct), fin_pct=100; end
-if fin_pct - inicio_pct > 100, fin_pct = inicio_pct + 100; end
+fprintf('Duración Total del Archivo: %.2f segundos\n', duracionTotal);
+
+inicio_seg = input('Inicio (s): ');
+if isempty(inicio_seg), inicio_seg = 0; end
+
+fin_seg = input('Fin (s): ');
+if isempty(fin_seg), fin_seg = duracionTotal; end
+
+if fin_seg > duracionTotal, fin_seg = duracionTotal; end
+if inicio_seg < 0, inicio_seg = 0; end
+if fin_seg <= inicio_seg, fin_seg = duracionTotal; end
+
+duracion_elegida = fin_seg - inicio_seg;
+pct_usado = (duracion_elegida / duracionTotal) * 100;
+fprintf('--> Se analizará %.2f%% del archivo (%.2f s)\n', pct_usado, duracion_elegida);
+
+% Convertir a porcentaje para modo batch compatibilidad
+batch_inicio_pct = (inicio_seg / duracionTotal) * 100;
+batch_fin_pct = (fin_seg / duracionTotal) * 100;
 
 %% --- EJECUCIÓN EN LOTE ---
 run_batch_mode = true;
 batch_idx = idx;
-batch_inicio_pct = inicio_pct;
-batch_fin_pct = fin_pct;
+% batch_inicio_pct y batch_fin_pct calculados arriba
 
 results_batch = struct();
 
@@ -138,7 +157,7 @@ for k = 1:length(metodos)
     end
 end
 
-sgtitle(['Integración Espectral | ' archivoSeleccionado.name ' | Inicio: ' num2str(inicio_pct) '% - Fin: ' num2str(fin_pct) '%'], 'Interpreter', 'none');
+sgtitle(sprintf('Integración Espectral | %s | %.2fs - %.2fs', archivoSeleccionado.name, inicio_seg, fin_seg), 'Interpreter', 'none');
 
 % Guardar Figura
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
