@@ -21,7 +21,10 @@ max_samples_slt = 5000;
 
 % Configuración Visualización
 anchoBandaDefault = 400e3;
-rangoColores = [-90 -40];
+% Rango Fijo de Visualización (MHz)
+f_min_visual = 1419.8;
+f_max_visual = 1420.2;
+rangoColores = [-90 -30];
 alinearRuido = true;
 nivelRuidoObjetivo = -80;
 umbral_guardado_dBm = -50;
@@ -150,25 +153,27 @@ step_block = blockSize - overlap_block;
 numBlocks = floor((length(y) - overlap_block) / step_block);
 
 % Inicializar Figuras
+f_min_vis = (fc - anchoBanda/2) / 1e6;
+f_max_vis = (fc + anchoBanda/2) / 1e6;
+
 if ~run_batch_mode
-    fig2D = figure('Color','w', 'Name', 'Superlet Viewer HI (2D)'); ax2D = axes; hold(ax2D, 'on');
-    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-    title(sprintf('Superlet | %s', name_no_ext), 'Interpreter', 'none');
-    axis tight; colormap(jet); view(0, 90); clim(ax2D, rangoColores); colorbar(ax2D);
+    % fig2D Initialization REMOVED
+    ax2D = []; fig2D = [];
 else
     ax2D = []; fig2D = [];
 end
 
 if ~run_batch_mode
-    fig3D = figure('Color', 'w', 'Name', 'Waterfall 3D - Superlet'); ax3D = axes; hold(ax3D, 'on');
+    fig3D = figure('Color', 'w', 'Name', ' 3D - Superlet'); ax3D = axes; hold(ax3D, 'on');
     xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
-    title(['Waterfall 3D | ' archivoSeleccionado.name], 'Interpreter', 'none');
+    title([' ' archivoSeleccionado.name], 'Interpreter', 'none');
     view(-45, 60); axis tight; colormap(jet); grid on; clim(ax3D, rangoColores); zlim(ax3D, rangoColores); colorbar(ax3D);
+    xlim(ax3D, [f_min_visual f_max_visual]);
 else
     ax3D = []; fig3D = [];
 end
 
-mask_roi = f_rf < fc;
+mask_roi = abs(f_rf - fc) <= anchoBanda/2;
 f_roi = f_rf(mask_roi);
 lista_final_eventos = [];
 sum_spec = zeros(length(f_rf), 1);
@@ -204,13 +209,23 @@ for k = 1:numBlocks
         S_dBm = S_dBm + (nivelRuidoObjetivo - noiseFloor);
     end
 
-    sum_spec = sum_spec + sum(S_dBm, 2);
+    % --- CÁLCULO DE PERFIL (Linear Average) ---
+    % S ya es magnitud lineal, S_dBm = 20*log10(S).
+    % Queremos promediar potencia: P_lin = S^2.
+    P_lin = S.^2;
+
+    sum_spec = sum_spec + sum(P_lin, 2);
     count_spec = count_spec + size(S_dBm, 2);
 
     % Métricas Robustas (Solo ROI)
     if any(mask_roi)
         S_dBm_roi = S_dBm(mask_roi, :);
-        m_bloque = calcularMetricas(f_roi, S_dBm_roi, t_block_abs, []);
+        % Ajuste: Pasar Potencia Lineal (S^2) a métricas
+        S_lin_roi = (10.^(S_dBm_roi./20)).^2; % O más directo si tuvieramos S original: S(mask_roi,:).^2
+        % Como S_dBm ya tiene offsets y calibraciones, mejor reversar eso:
+        P_lin_input = 10.^(S_dBm_roi./10);
+
+        m_bloque = calcularMetricas(f_roi, P_lin_input, t_block_abs, []);
 
         if ~isempty(m_bloque)
             if m_bloque.P_max_dBm > umbral_guardado_dBm
@@ -225,10 +240,11 @@ for k = 1:numBlocks
     idx_plot = 1:step_plot:length(t_block_abs);
     t_plot = t_block_abs(idx_plot);
     S_dBm_plot = S_dBm(:, idx_plot);
-    mask_plot_bw = abs(f_rf - fc) <= anchoBanda/2;
+    % Usar límites visuales manuales
+    mask_plot_bw = f_rf >= f_min_visual*1e6 & f_rf <= f_max_visual*1e6;
 
     if ~run_batch_mode
-        surf(ax2D, f_rf(mask_plot_bw)/1e6, t_plot, S_dBm_plot(mask_plot_bw, :).', 'EdgeColor', 'none');
+        % surf(ax2D, f_rf(mask_plot_bw)/1e6, t_plot, S_dBm_plot(mask_plot_bw, :).', 'EdgeColor', 'none');
         surf(ax3D, f_rf(mask_plot_bw)/1e6, t_plot, S_dBm_plot(mask_plot_bw, :).', 'EdgeColor', 'none');
         drawnow limitrate;
     end
@@ -239,8 +255,12 @@ end
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.fig']));
+    % Asegurar límites antes de guardar "final de analisis"
+    if ~isempty(ax3D) && isvalid(ax3D)
+        xlim(ax3D, [f_min_visual f_max_visual]);
+    end
+    % saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_SinMarcadores_' name_no_ext '.fig']));
     saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_SinMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_SinMarcadores_' name_no_ext '.fig']));
 end
@@ -265,26 +285,30 @@ if ~isempty(lista_final_eventos)
         pk=eventos_sorted(p);
         if 1, c_m = 'm'; else, c_m = 'c'; end
         if ~run_batch_mode
-            plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerSize', 10, 'MarkerFaceColor', c_m, 'MarkerEdgeColor', 'k');
-            plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerSize', 10, 'MarkerFaceColor', c_m, 'MarkerEdgeColor', 'k');
+            % plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, pk.P_max_dBm, 'v', 'MarkerSize', 10, 'MarkerFaceColor', c_m, 'MarkerEdgeColor', 'k');
+            plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, pk.P_max_dBm, 'v', 'MarkerSize', 10, 'MarkerFaceColor', c_m, 'MarkerEdgeColor', 'k');
         end
     end
 end
-return;
+
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_ConMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_ConMarcadores_' name_no_ext '.fig']));
+    % saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_ConMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['SUPERLET_2D_ConMarcadores_' name_no_ext '.fig']));
     saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_ConMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['SUPERLET_3D_ConMarcadores_' name_no_ext '.fig']));
 end
 
-spec_profile = sum_spec / max(count_spec, 1);
+spec_profile_lin = sum_spec / max(count_spec, 1);
 if ~run_batch_mode
+    % Convertimos de vuelta a dB
+    % P_lin era S^2. Queremos S_dBm = 10*log10(P_lin).
+    spec_profile = 10*log10(spec_profile_lin + eps('single'));
+
     figProfile = figure('Name', 'Perfil Promedio', 'Color', 'w');
     plot(f_rf/1e6, spec_profile, 'k', 'LineWidth', 1.2);
     grid on; xlabel('Frecuencia (MHz)'); ylabel('Amplitud Promedio (dBm)');
-    xlim([f_min_req, f_min_req + anchoBanda]/1e6);
+    xlim([f_min_visual f_max_visual]);
     xline(f_HI/1e6, 'r--', 'LineWidth', 1);
     title('Estimación Espectral (Superlet)');
     saveas(figProfile, fullfile(dir_base_img, ['SUPERLET_Perfil_' name_no_ext '.png']));
@@ -295,7 +319,8 @@ disp('Proceso Superlet completado.');
 
 if run_batch_mode
     if ~exist('spec_profile', 'var')
-        spec_profile = sum_spec / max(count_spec, 1);
+        spec_profile_lin = sum_spec / max(count_spec, 1);
+        spec_profile = 10*log10(spec_profile_lin + eps('single'));
     end
     results_batch.Superlet.f = f_rf;
     results_batch.Superlet.P = spec_profile;

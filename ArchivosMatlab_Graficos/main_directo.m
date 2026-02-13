@@ -14,13 +14,16 @@ carpeta = 'ArchivosIQ';
 
 % Configuración STFT
 nfft = 1024;
-window_size = 1024;
+window_size = 128;
 overlap = window_size/2;
-nombre_ventana = 'FlatTop';
+nombre_ventana = 'Blackman';
 
 umbral_guardado_dBm = -60;
 offset_calibracion = -0;
 anchoBanda = 400e3;
+% Rango Fijo de Visualización (MHz)
+f_min_visual = 1419.8;
+f_max_visual = 1420.2;
 rangoColores = [-90 -40];
 alinearRuido = true;
 nivelRuidoObjetivo = -80;
@@ -138,16 +141,19 @@ end
 
 % Inicializar Figuras
 if ~run_batch_mode
-    fig2D = figure('Name', 'Espectro Directo 2D', 'Color', 'w'); ax2D = axes; hold(ax2D,'on');
-    xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
-    title(sprintf('Analisis Directo | %s', archivoSeleccionado.name), 'Interpreter', 'none');
-    clim(ax2D, rangoColores); colormap(jet); colorbar; view(0,90);
+    % fig2D Initialization REMOVED
+    % fig2D = figure('Name', 'Espectro Directo 2D', 'Color', 'w'); ax2D = axes; hold(ax2D,'on');
+    % xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
+    % title(sprintf('Analisis Directo | %s', archivoSeleccionado.name), 'Interpreter', 'none');
+    % clim(ax2D, rangoColores); colormap(jet); colorbar; view(0,90);
+    ax2D = []; fig2D = [];
 
-    fig3D = figure('Name', 'Waterfall Directo 3D', 'Color', 'w'); ax3D = axes; hold(ax3D,'on');
+    fig3D = figure('Name', ' Directo 3D', 'Color', 'w'); ax3D = axes; hold(ax3D,'on');
     xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
     zlabel('Potencia (dBm)');
-    title(sprintf('Waterfall 3D | %s', archivoSeleccionado.name), 'Interpreter', 'none');
+    title(sprintf(' %s', archivoSeleccionado.name), 'Interpreter', 'none');
     view(-45, 60); grid on; clim(ax3D, rangoColores); zlim(ax3D, rangoColores); colormap(jet); colorbar;
+    xlim(ax3D, [f_min_visual f_max_visual]);
 end
 
 lista_final_eventos = [];
@@ -182,7 +188,10 @@ for k = 1:numBlocks
         P_dBm = P_dBm + (nivelRuidoObjetivo - ruido_est);
     end
 
-    sum_spec = sum_spec + sum(P_dBm, 2);
+    % --- CÁLCULO DE PERFIL (Linear Average) ---
+    % Convertimos a lineal para sumar energía real, no dB
+    P_lin = 10.^(P_dBm./10);
+    sum_spec = sum_spec + sum(P_lin, 2);
     count_spec = count_spec + size(P_dBm, 2);
 
     % --- CÁLCULO DE MÉTRICAS ROBUSTAS ---
@@ -191,7 +200,7 @@ for k = 1:numBlocks
     P_roi = P_dBm(mask_roi, :);
     f_roi_curr = F_abs(mask_roi);
 
-    m_bloque = calcularMetricas(f_roi_curr, P_roi, T_abs, []);
+    m_bloque = calcularMetricas(f_roi_curr, 10.^(P_roi./10), T_abs, []);
 
     if ~isempty(m_bloque)
         % Filtro Previo (Nivel > Umbral) para no llenar de ruido
@@ -201,7 +210,8 @@ for k = 1:numBlocks
     end
 
     % Graficar (Downsampling)
-    idx_vis = abs(F_stft) <= (anchoBanda/2);
+    % Graficar - Usar los límites visuales definidos por el usuario
+    idx_vis = F_abs >= f_min_visual*1e6 & F_abs <= f_max_visual*1e6;
     F_vis = F_abs(idx_vis);
     P_vis = P_dBm(idx_vis, :);
 
@@ -211,7 +221,7 @@ for k = 1:numBlocks
     P_plot = P_vis(:, idx_t_plot);
 
     if ~run_batch_mode
-        surf(ax2D, F_vis/1e6, T_plot, P_plot.', 'EdgeColor', 'none');
+        % surf(ax2D, F_vis/1e6, T_plot, P_plot.', 'EdgeColor', 'none');
         surf(ax3D, F_vis/1e6, T_plot, P_plot.', 'EdgeColor', 'none');
         drawnow limitrate;
     end
@@ -225,8 +235,9 @@ end
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.fig']));
+    % saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_SinMarcadores_' name_no_ext '.fig']));
+    if ~isempty(ax3D) && isvalid(ax3D), xlim(ax3D, [f_min_visual f_max_visual]); end
     saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_SinMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_SinMarcadores_' name_no_ext '.fig']));
 
@@ -253,7 +264,7 @@ if ~run_batch_mode
 
         for p_idx = 1:length(eventos_sorted)
             pk = eventos_sorted(p_idx);
-            z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
+            z_mark = pk.P_max_dBm;
 
             % Color único para todos, ya no validamos estabilidad
             color_mark = 'm';
@@ -261,8 +272,8 @@ if ~run_batch_mode
 
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerSize', 8, ...
                 'MarkerFaceColor', color_mark, 'MarkerEdgeColor','k');
-            plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerSize', 8, ...
-                'MarkerFaceColor', color_mark, 'MarkerEdgeColor','k');
+            % plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerSize', 8, ...
+            %    'MarkerFaceColor', color_mark, 'MarkerEdgeColor','k');
 
             if p_idx <= 5
                 text(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, sprintf(' Dif: %.1f', pk.Diferencia_Potencia_dBm), ...
@@ -273,16 +284,17 @@ if ~run_batch_mode
         nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_Directo_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
         registrarMetrica('Directo', lista_final_eventos, nombreExcel);
     end
-    return;
 
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.fig']));
+
+    % saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['Directo_2D_ConMarcadores_' name_no_ext '.fig']));
     saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_ConMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['Directo_3D_ConMarcadores_' name_no_ext '.fig']));
 
     % Perfil 1D
     figProfile = figure('Name', 'Perfil Promedio', 'Color', 'w');
-    spec_profile = sum_spec / max(count_spec, 1);
+    spec_profile_lin = sum_spec / max(count_spec, 1);
+    spec_profile = 10*log10(spec_profile_lin);
     plot(f_abs/1e6, spec_profile, 'k', 'LineWidth', 1.2);
     grid on; xlabel('Frecuencia (MHz)');
     ylabel('Amplitud Promedio (dBm)');
@@ -295,7 +307,10 @@ end
 if run_batch_mode
     % Recalcular spec_profile por si no entró al bloque de ploteo
     if ~exist('spec_profile', 'var')
-        spec_profile = sum_spec / max(count_spec, 1);
+        if ~exist('spec_profile', 'var')
+            spec_profile_lin = sum_spec / max(count_spec, 1);
+            spec_profile = 10*log10(spec_profile_lin);
+        end
     end
     results_batch.Directo.f = f_abs;
     results_batch.Directo.P = spec_profile;

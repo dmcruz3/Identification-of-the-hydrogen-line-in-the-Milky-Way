@@ -1,5 +1,5 @@
 clc
-clear all;
+clear
 close all;
 
 if ~exist('run_batch_mode', 'var')
@@ -13,7 +13,10 @@ f_HI = 1420e6;
 carpeta = 'ArchivosIQ';
 
 % Configuración Visualización y Análisis
-anchoBanda = 600e3;
+anchoBanda = 400e3;
+% Rango Fijo de Visualización (MHz)
+f_min_visual = 1419.8;
+f_max_visual = 1420.2;
 rangoColores = [-90 -40];
 alinearRuido = true;
 nivelRuidoObjetivo = -80;
@@ -102,7 +105,7 @@ s = fread(f, muestrasLeer, 'short=>single');
 fclose(f);
 
 y = s(1:2:end) + 1i*s(2:2:end);
-% Normalización ELIMINADA (dBmm reales)
+% Normalización ELIMINADA (dBm reales)
 % m = max(abs(y));
 % if m > 0, y = y / m; end
 
@@ -127,20 +130,17 @@ disp('--- Calculando CWT por Ventanas ---');
 if exist('cwt', 'file') ~= 2, error('Wavelet Toolbox necesario.'); end
 
 % Inicializar Figuras
-if ~run_batch_mode
-    fig2D = figure('Name', 'Escalograma CWT (2D)', 'Color', 'w'); ax2D = axes; hold(ax2D, 'on');
-    xlabel(ax2D, 'Frecuencia (MHz)'); ylabel(ax2D, 'Tiempo (s)');
-    title(sprintf('CWT 2D | %s', name_no_ext), 'Interpreter', 'none');
-    clim(ax2D, rangoColores); view(ax2D, 0, 90); colormap(fig2D, jet); colorbar(ax2D);
-else
-    ax2D = []; fig2D = [];
-end
+% Límites de frecuencia para visualización centrada
+f_min_vis = (fc - anchoBanda/2) / 1e6;
+f_max_vis = (fc + anchoBanda/2) / 1e6;
+
 
 if ~run_batch_mode
-    fig3D = figure('Name', 'Waterfall CWT (3D)', 'Color', 'w'); ax3D = axes; hold(ax3D, 'on');
-    grid(ax3D, 'on'); xlabel(ax3D, 'Frecuencia (MHz)'); ylabel(ax3D, 'Tiempo (s)'); zlabel(ax3D, 'Magnitud (dBmm)');
-    title(sprintf('Waterfall CWT | %s', name_no_ext), 'Interpreter', 'none');
+    fig3D = figure('Name', ' CWT (3D)', 'Color', 'w'); ax3D = axes; hold(ax3D, 'on');
+    grid(ax3D, 'on'); xlabel(ax3D, 'Frecuencia (MHz)'); ylabel(ax3D, 'Tiempo (s)'); zlabel(ax3D, 'Magnitud (dBm)');
+    title(sprintf(' CWT | %s', name_no_ext), 'Interpreter', 'none');
     clim(ax3D, rangoColores); zlim(ax3D, rangoColores); view(ax3D, -45, 60); colormap(fig3D, jet); colorbar(ax3D);
+    xlim(ax3D, [f_min_visual f_max_visual]);
 else
     ax3D = []; fig3D = [];
 end
@@ -176,26 +176,46 @@ for k = 1:numBlocks
 
     if ndims(cfs) == 3
         % Señal Compleja
-        mag_neg = 20*log10(abs(cfs(:,:,2))) + offset_calibracion;
-        % Calcular y mostrar ruido siempre
-        noise_val = median(mag_neg(:));
-        fprintf('   > Nivel de Ruido Detectado (Bloque %d): %.2f dBmm\n', k, noise_val);
+        % Lado Izquierdo (f < fc): cfs(:,:,2) -> Frecuencias Negativas
+        mag_left = 20*log10(abs(cfs(:,:,2))) + offset_calibracion;
+        f_left = fc - f;
+
+        % Lado Derecho (f > fc): cfs(:,:,1) -> Frecuencias Positivas
+        mag_right = 20*log10(abs(cfs(:,:,1))) + offset_calibracion;
+        f_right = fc + f;
+
+        % Unificar Datos
+        f_combined = [f_left; f_right];
+        mag_combined = [mag_left; mag_right];
+
+        % Ordenar
+        [f_sorted, idx_sort] = sort(f_combined);
+        mag_sorted = mag_combined(idx_sort, :);
+
+        % Calcular Ruido
+        noise_val = median(mag_sorted(:));
+        fprintf('   > Nivel de Ruido Detectado (Bloque %d): %.2f dBm\n', k, noise_val);
 
         if alinearRuido
             offset = nivelRuidoObjetivo - noise_val;
-            mag_neg = mag_neg + offset;
+            mag_sorted = mag_sorted + offset;
         end
-        f_axis = fc - f; % Lado izquierdo
 
-        mag_for_metrics = mag_neg;
+        f_axis = f_sorted;
+        mag_for_metrics = mag_sorted;
         f_for_metrics = f_axis;
 
-        % Graficar
-        idx_vis = f > (anchoBanda * 0);
-        f_vis = f(idx_vis);
-        if ~run_batch_mode
-            surf(ax2D, (fc - f_vis)/1e6, t_plot_vals, mag_neg(idx_vis, idx_plot).', 'EdgeColor', 'none');
-            surf(ax3D, (fc - f_vis)/1e6, t_plot_vals, mag_neg(idx_vis, idx_plot).', 'EdgeColor', 'none');
+        % Graficar - Filtrar por ancho de banda para no cargar gráfica
+        % Usamos anchoBanda efectivo centrado en fc.
+        % f_axis está en Hz.
+        % Graficar - Usar los límites visuales definidos por el usuario
+        % f_axis está en Hz. f_min_visual/f_max_visual en MHz.
+        idx_vis = f_axis >= f_min_visual*1e6 & f_axis <= f_max_visual*1e6;
+        f_vis = f_axis(idx_vis);
+
+        if ~run_batch_mode && any(idx_vis)
+            % surf(ax2D, f_vis/1e6, t_plot_vals, mag_sorted(idx_vis, idx_plot).', 'EdgeColor', 'none');
+            surf(ax3D, f_vis/1e6, t_plot_vals, mag_sorted(idx_vis, idx_plot).', 'EdgeColor', 'none');
         end
 
     else
@@ -203,7 +223,7 @@ for k = 1:numBlocks
         mag = 20*log10(abs(cfs)) + offset_calibracion;
         % Calcular y mostrar ruido siempre
         noise_val = median(mag(:));
-        fprintf('   > Nivel de Ruido Detectado (Bloque %d): %.2f dBmm\n', k, noise_val);
+        fprintf('   > Nivel de Ruido Detectado (Bloque %d): %.2f dBm\n', k, noise_val);
 
         if alinearRuido
             offset = nivelRuidoObjetivo - noise_val;
@@ -215,15 +235,24 @@ for k = 1:numBlocks
         f_for_metrics = f_axis;
 
         % Graficar
-        if ~run_batch_mode
-            surf(ax2D, (fc + f)/1e6, t_plot_vals, mag(:, idx_plot).', 'EdgeColor', 'none');
-            surf(ax3D, (fc + f)/1e6, t_plot_vals, mag(:, idx_plot).', 'EdgeColor', 'none');
+        % Graficar - Usar los límites visuales definidos por el usuario
+        idx_vis = f_axis >= f_min_visual*1e6 & f_axis <= f_max_visual*1e6;
+        f_vis = f_axis(idx_vis);
+
+        if ~run_batch_mode && any(idx_vis)
+            surf(ax2D, f_vis/1e6, t_plot_vals, mag(idx_vis, idx_plot).', 'EdgeColor', 'none');
+            surf(ax3D, f_vis/1e6, t_plot_vals, mag(idx_vis, idx_plot).', 'EdgeColor', 'none');
         end
     end
 
     % --- MÉTRICAS ROBUSTAS CWT ---
     % Tomamos el espectrograma completo del bloque
-    m_bloque = calcularMetricas(f_for_metrics, mag_for_metrics, t_block, []);
+    % Ajuste: Convertir a lineal (Amplitud^2 o Potencia) para calcularMetricas.m
+    % mag_for_metrics está en dBm (20*log10) o dB (20*log10 o 10*log10).
+    % Asumimos que queremos magnitud de potencia lineal para SNR.
+    P_lin_metrics = 10.^(mag_for_metrics./10);
+
+    m_bloque = calcularMetricas(f_for_metrics, P_lin_metrics, t_block, []);
 
     if ~isempty(m_bloque)
         if m_bloque.P_max_dBm > umbral_guardado_dBm
@@ -232,7 +261,15 @@ for k = 1:numBlocks
     end
 
     % Acumular 1D (usando el centroide del bloque)
-    current_sum = sum(mag_for_metrics, 2);
+    % --- CÁLCULO DE PERFIL (Linear Average) ---
+    % Convertimos a lineal si no lo está (CWT usa dBm)
+    % mag_for_metrics ya está en dBm (20*log10), así que volvemos a amplitud lineal
+    Amp_lin = 10.^(mag_for_metrics./20); % O 10^(dB/20) para amplitud, o 10^(dB/10) para potencia.
+    % La métrica visual suele ser potencia. Usaremos 10^(dB/10) asumiendo que queremos Promedio de Potencia.
+    P_lin = 10.^(mag_for_metrics./10);
+
+    current_sum = sum(P_lin, 2);
+
     if isempty(sum_spec)
         sum_spec = current_sum;
         f_profile = f_for_metrics;
@@ -250,8 +287,12 @@ end
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.fig']));
+    % Asegurar límites antes de guardar "final de analisis"
+    if ~isempty(ax3D) && isvalid(ax3D)
+        xlim(ax3D, [f_min_visual f_max_visual]);
+    end
+    % saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_SinMarcadores_' name_no_ext '.fig']));
     saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_SinMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_SinMarcadores_' name_no_ext '.fig']));
 end
@@ -275,33 +316,35 @@ if ~isempty(lista_final_eventos)
 
     for p = 1:length(eventos_sorted)
         pk = eventos_sorted(p);
-        z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
+        z_mark = pk.P_max_dBm;
         if 1, c='m'; else, c='c'; end
         if ~run_batch_mode
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
-            plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
+            % plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
         end
     end
 end
-return;
+
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_ConMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_ConMarcadores_' name_no_ext '.fig']));
+    % saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_ConMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['CWT_2D_ConMarcadores_' name_no_ext '.fig']));
     saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_ConMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['CWT_3D_ConMarcadores_' name_no_ext '.fig']));
 end
 
 if ~isempty(sum_spec)
-    spec_profile = sum_spec / max(count_spec, 1);
+    spec_profile_lin = sum_spec / max(count_spec, 1);
+    spec_profile = 10*log10(spec_profile_lin);
     if ~run_batch_mode
         figProfile = figure('Name', 'Perfil Espectral Promedio', 'Color', 'w');
         [f_sorted, idx_s] = sort(f_profile);
         spec_sorted = spec_profile(idx_s);
         plot(f_sorted/1e6, spec_sorted, 'k', 'LineWidth', 1.2);
-        grid on; xlabel('Frecuencia (MHz)'); ylabel('Amplitud Promedio (dBmm)');
+        grid on; xlabel('Frecuencia (MHz)'); ylabel('Amplitud Promedio (dBm)');
         xline(fc/1e6, 'r--', 'LineWidth', 1);
         title('Estimación Espectral (CWT)');
+        xlim([f_min_vis f_max_vis]);
         saveas(figProfile, fullfile(dir_base_img, ['CWT_Perfil_' name_no_ext '.png']));
         saveas(figProfile, fullfile(dir_base_img, ['CWT_Perfil_' name_no_ext '.fig']));
     end
@@ -311,7 +354,8 @@ disp('Proceso CWT Completado.');
 
 if run_batch_mode
     if ~exist('spec_profile', 'var')
-        spec_profile = sum_spec / max(count_spec, 1);
+        spec_profile_lin = sum_spec / max(count_spec, 1);
+        spec_profile = 10*log10(spec_profile_lin);
     end
     results_batch.CWT.f = f_profile;
     results_batch.CWT.P = spec_profile;

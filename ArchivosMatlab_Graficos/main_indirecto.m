@@ -14,14 +14,17 @@ carpeta = 'ArchivosIQ';
 
 % Configuración Correlación
 nfft = 1024;
-max_lag = 300;
+max_lag = 37;
 nombre_ventana_lag = 'bartlett';
-window_len = 1024;
+window_len = 128;
 overlap = window_len/2;
 nivelRuidoObjetivo = -80;
 
 % Configuración Visualización
 anchoBanda = 400e3;
+% Rango Fijo de Visualización (MHz)
+f_min_visual = 1419.8;
+f_max_visual = 1420.2;
 rangoColores = [-90 -40];
 alinearRuido = true;
 umbral_guardado_dBm = -70;
@@ -118,17 +121,17 @@ w_lag = bartlett(2*max_lag+1);
 
 % Figuras
 if ~run_batch_mode
-    fig2D=figure('Name', 'Espectro Indirecto 2D', 'Color','w'); ax2D=axes; hold(ax2D,'on');
-    title(sprintf('Indirecto 2D | %s', name_no_ext), 'Interpreter', 'none');
-    view(0,90); clim(ax2D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)');
+    % fig2D Initialization REMOVED
+    ax2D=[]; fig2D=[];
 else
     ax2D=[]; fig2D=[];
 end
 
 if ~run_batch_mode
-    fig3D=figure('Name', 'Waterfall Indirecto 3D', 'Color','w'); ax3D=axes; hold(ax3D,'on');
-    title(sprintf('Waterfall Indirecto | %s', name_no_ext), 'Interpreter', 'none');
+    fig3D=figure('Name', ' Indirecto 3D', 'Color','w'); ax3D=axes; hold(ax3D,'on');
+    title(sprintf(' Indirecto | %s', name_no_ext), 'Interpreter', 'none');
     view(-45,60); grid on; clim(ax3D,rangoColores); zlim(ax3D,rangoColores); colormap(jet); colorbar; xlabel('Frecuencia (MHz)'); ylabel('Tiempo (s)'); zlabel('Potencia (dBm)');
+    xlim(ax3D, [f_min_visual f_max_visual]);
 else
     ax3D=[]; fig3D=[];
 end
@@ -171,15 +174,18 @@ for k=1:numBlocks
         P_dBm = P_dBm + (nivelRuidoObjetivo - r_est);
     end
 
-    sum_spec = sum_spec + sum(P_dBm, 2);
+    % --- CÁLCULO DE PERFIL (Linear Average) ---
+    P_lin = 10.^(P_dBm./10);
+    sum_spec = sum_spec + sum(P_lin, 2);
     count_spec = count_spec + size(P_dBm, 2);
 
     % Métricas Robustas
-    mask_roi = f_vec < 0;
+    % Métricas Robustas (Full Spectrum)
+    mask_roi = abs(f_vec) <= anchoBanda/2;
     P_roi = P_dBm(mask_roi,:);
     f_roi_curr = f_abs(mask_roi);
 
-    m_bloque = calcularMetricas(f_roi_curr, P_roi, t_seg_abs, []);
+    m_bloque = calcularMetricas(f_roi_curr, 10.^(P_roi./10), t_seg_abs, []);
 
     if ~isempty(m_bloque)
         if m_bloque.P_max_dBm > umbral_guardado_dBm
@@ -188,9 +194,9 @@ for k=1:numBlocks
     end
 
     % Graficar
-    mask_vis = abs(f_vec) <= anchoBanda/2;
+    mask_vis = f_abs >= f_min_visual*1e6 & f_abs <= f_max_visual*1e6;
     if ~run_batch_mode
-        surf(ax2D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
+        % surf(ax2D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
         surf(ax3D, f_abs(mask_vis)/1e6, t_seg_abs, P_dBm(mask_vis,:).', 'EdgeColor','none');
         drawnow limitrate;
     end
@@ -201,8 +207,9 @@ end
 timestamp = datestr(now, 'yyyymmdd_HHMMSS');
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.fig']));
+    % saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_SinMarcadores_' name_no_ext '.fig']));
+    if ~isempty(ax3D) && isvalid(ax3D), xlim(ax3D, [f_min_visual f_max_visual]); end
     saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_SinMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_SinMarcadores_' name_no_ext '.fig']));
 end
@@ -223,11 +230,11 @@ if ~isempty(lista_final_eventos)
 
     for p=1:length(lista_final_eventos)
         pk=lista_final_eventos(p);
-        z_mark = min(max(pk.P_max_dBm, rangoColores(1)), rangoColores(2));
+        z_mark = pk.P_max_dBm;
         if 1, c='m'; else, c='c'; end
         if ~run_batch_mode
             plot3(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
-            plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
+            % plot3(ax2D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, 200, 'v', 'MarkerFaceColor',c,'MarkerEdgeColor','k');
             if p <= 5
                 text(ax3D, pk.Freq_Hz/1e6, pk.Tiempo_Max_Seg, z_mark, sprintf(' Dif: %.1f', pk.Diferencia_Potencia_dBm), 'Color',c, 'BackgroundColor', 'w', 'Margin', 1);
             end
@@ -236,17 +243,19 @@ if ~isempty(lista_final_eventos)
     nombreExcel = fullfile(dir_base_dat, ['Reporte_Metricas_Indirecto_' datestr(now, 'yyyymmdd_HHMMSS') '.xlsx']);
     registrarMetrica('Indirecto', lista_final_eventos, nombreExcel);
 end
-return;
+
 
 if ~run_batch_mode
-    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_ConMarcadores_' name_no_ext '.png']));
-    saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_ConMarcadores_' name_no_ext '.fig']));
+    % saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_ConMarcadores_' name_no_ext '.png']));
+    % saveas(fig2D, fullfile(dir_base_img, ['INDIRECTO_2D_ConMarcadores_' name_no_ext '.fig']));
     saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_ConMarcadores_' name_no_ext '.png']));
     saveas(fig3D, fullfile(dir_base_img, ['INDIRECTO_3D_ConMarcadores_' name_no_ext '.fig']));
 end
 
-spec_profile = sum_spec / max(count_spec, 1);
+spec_profile_lin = sum_spec / max(count_spec, 1);
 if ~run_batch_mode
+    % Convertimos de vuelta a dB para visualizar
+    spec_profile = 10*log10(spec_profile_lin);
     figProfile = figure('Name', 'Perfil Promedio', 'Color', 'w');
     plot(f_abs/1e6, spec_profile, 'k', 'LineWidth', 1.2);
     grid on; xlabel('Frecuencia (MHz)'); ylabel('Amplitud Promedio (dBm)');
@@ -260,7 +269,10 @@ disp('Proceso Indirecto completado.');
 
 if run_batch_mode
     if ~exist('spec_profile', 'var')
-        spec_profile = sum_spec / max(count_spec, 1);
+        if ~exist('spec_profile', 'var')
+            spec_profile_lin = sum_spec / max(count_spec, 1);
+            spec_profile = 10*log10(spec_profile_lin);
+        end
     end
     results_batch.Indirecto.f = f_abs;
     results_batch.Indirecto.P = spec_profile;

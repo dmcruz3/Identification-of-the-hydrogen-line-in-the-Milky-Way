@@ -1,99 +1,89 @@
-function metrics = calcularMetricas(f, P_dBm, t, config)
+function metrics = calcularMetricas(f, P_lin, t, config)
 % calcularMetricas - Calcula métricas robustas para detección de HI.
 %
 % Entradas:
 %   f      : Vector de frecuencias (Hz)
-%   P_dBm   : Matriz o Vector de Potencia (dBm). Si es matriz: [Frec x Tiempo]
+%   P_lin  : Matriz o Vector de Potencia LINEAL (mW o V^2).
+%            NO dBm.
+%            Si es matriz: [Frec x Tiempo]
 %   t      : Vector de tiempo (s)
-%   config : Estructura con parámetros (opcional, por compatibilidad)
 %
 % Salida:
-%   metrics : Vector de estructuras con los eventos detectados.
-%             Campos: Freq_Hz, Tiempo_Max_Seg, P_max_dBm, P_ruido_dBm,
-%                     Diferencia_Potencia_dBm, Delta_Estabilidad_dBm,
-%                     Validacion_Estabilidad (0/1).
+%   metrics : Struct con métricas en dBm (convertidas al final).
 
 metrics = [];
 
 % 0. Validaciones básicas
-if isempty(P_dBm) || isempty(f), return; end
+if isempty(P_lin) || isempty(f), return; end
 
-% Asegurar dimensiones (Power debe ser vector para picos instantáneos o matriz)
-% Si es matriz, operamos sobre el perfil "Max Hold" o promedio según lógica.
-% Para detección robusta, usaremos el Máximo en el bloque.
+% Asegurar dimensiones
+if ismatrix(P_lin) && size(P_lin, 2) > 1
+    % Perfil para detección de RUIDO: Promedio Lineal (Energía)
+    P_perfil_avg_lin = mean(P_lin, 2);
 
-if ismatrix(P_dBm) && size(P_dBm, 2) > 1
-    % Si entra un bloque (espectrograma), colapsamos a perfil máximo para detección
-    [P_perfil, idx_t_max] = max(P_dBm, [], 2); % Max sobre tiempo
+    % Perfil para detección de PICO: Máximo Instantáneo
+    P_perfil_max_lin = max(P_lin, [], 2);
+
+    [~, idx_t_max] = max(P_lin, [], 2);
 else
-    P_perfil = P_dBm(:);
-    idx_t_max = ones(size(P_perfil));
+    P_perfil_avg_lin = P_lin(:);
+    P_perfil_max_lin = P_lin(:);
+    idx_t_max = ones(size(P_lin));
 end
 
-% 1. Encontrar Pico Máximo y Piso de Ruido Global
-[P_max_val, idx_peak] = max(P_perfil);
+% 1. Encontrar Pico Máximo (Usando Perfil MAXIMO)
+[P_max_val_lin, idx_peak] = max(P_perfil_max_lin);
 freq_peak = f(idx_peak);
 
-% Estimación robusta del ruido (Mediana de todo el espectro)
-% Excluimos la zona inmediata del pico para no contaminar el ruido
-ancho_excl = 20e3; % +/- 20 kHz alrededor del pico
+% Estimación robusta del ruido (Usando Perfil PROMEDIO para suavizar ruido)
+ancho_excl = 20e3;
 mask_noise = abs(f - freq_peak) > ancho_excl;
 
 if any(mask_noise)
-    P_ruido_val = median(P_perfil(mask_noise));
+    P_ruido_val_lin = median(P_perfil_avg_lin(mask_noise));
 else
-    P_ruido_val = median(P_perfil);
+    P_ruido_val_lin = median(P_perfil_avg_lin);
 end
 
-% Estimación Simple (Media de todo el espectro, para comparación)
-P_ruido_mean_val = mean(P_perfil);
+% Estimación Simple (Media Lineal)
+P_ruido_mean_val_lin = mean(P_perfil_avg_lin);
 
-% 2. Métrica Principal: Diferencia Pico - Ruido
-% 2. Métrica Principal: Diferencia Pico - Ruido
-Diferencia_dBm = P_max_val - P_ruido_val;           % Robusta (vs Mediana)
-Diferencia_Simple_dBm = P_max_val - P_ruido_mean_val; % Simple (vs Media)
+% 2. Métrica Principal: RELACIÓN (SNR) Lineal
+% Diferencia = P_max / P_ruido (en lineal es división)
+SNR_lin = P_max_val_lin / P_ruido_val_lin;
+SNR_Simple_lin = P_max_val_lin / P_ruido_mean_val_lin;
 
-% 3. Análisis de Estabilidad (Solo si es matriz y tenemos dimensión tiempo)
-Delta_Estabilidad = 0;
-% Es_Estable = 1; % Eliminado
+% 3. Análisis de Estabilidad
+Delta_Estabilidad_dB = 0;
+tiempo_evento = t(1);
 
-tiempo_evento = t(1); % Default
-
-if ismatrix(P_dBm) && size(P_dBm, 2) > 1
-    % Recuperamos la traza temporal en la frecuencia del pico
-    traza_temporal = P_dBm(idx_peak, :);
-
-    % Delta Estabilidad: Variación (Max - Min) en esa frecuencia durante el bloque
-    % Un transitorio tendrá un Delta muy alto. Una señal continua, bajo.
-    Delta_Estabilidad = max(traza_temporal) - min(traza_temporal);
-
-    % Criterio de Validación: Delta < 6 dBm (definido por usuario)
-    % (Logica de transietoriedad eliminada por solicitud del usuario)
-    % if Delta_Estabilidad < 6
-    %     Es_Estable = 1;
-    % else
-    %     Es_Estable = 0; % Transitorio
-    % end
-
-    % Tiempo exacto del máximo
+if ismatrix(P_lin) && size(P_lin, 2) > 1
+    traza_temporal_lin = P_lin(idx_peak, :);
+    % Delta en dB: 10*log10(Max_lin / Min_lin)
+    Delta_Estabilidad_dB = 10*log10(max(traza_temporal_lin) / min(traza_temporal_lin));
     tiempo_evento = t(idx_t_max(idx_peak));
 end
 
-% 4. Empaquetar Resultado
-% Solo reportamos el pico dominante del bloque/segmento para robustez.
-
+% 4. Empaquetar Resultado (Convertir todo a dBm para reporte)
 m_struct = struct();
 m_struct.Freq_Hz = freq_peak;
 m_struct.Tiempo_Max_Seg = tiempo_evento;
 
-m_struct.P_max_dBm = P_max_val;
-m_struct.P_ruido_dBm = P_ruido_val;         % Mediana (Robusto)
-m_struct.P_ruido_Mean_dBm = P_ruido_mean_val; % Media (Simple)
-m_struct.P_promedio_dBm = mean(P_perfil);   % (Redundante con arriba, pero ok mantener)
+m_struct.P_max_dBm = 10*log10(P_max_val_lin);
+m_struct.P_ruido_dBm = 10*log10(P_ruido_val_lin);
+m_struct.P_ruido_Mean_dBm = 10*log10(P_ruido_mean_val_lin);
+m_struct.P_promedio_dBm = 10*log10(mean(P_perfil_avg_lin));
 
-m_struct.Diferencia_Potencia_dBm = Diferencia_dBm;        % Robusta
-m_struct.Diferencia_Simple_dBm = Diferencia_Simple_dBm;   % Simple
-m_struct.Delta_Estabilidad_dBm = Delta_Estabilidad;
+% Diferencia en dB = 10*log10(SNR_lineal)
+m_struct.Diferencia_Potencia_dBm = 10*log10(SNR_lin);
+m_struct.Diferencia_Simple_dBm = 10*log10(SNR_Simple_lin);
+
+m_struct.Delta_Estabilidad_dBm = Delta_Estabilidad_dB;
+
+% -- Valores Lineales (NUEVOS - Pedido Ingeniero) --
+m_struct.P_max_Lineal = P_max_val_lin;
+m_struct.P_ruido_Lineal = P_ruido_val_lin;
+m_struct.SNR_Lineal = SNR_lin; % Relación (veces)
 
 metrics = [metrics, m_struct];
 end
